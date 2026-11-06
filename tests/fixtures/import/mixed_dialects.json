@@ -1,0 +1,98 @@
+{
+  "@context": {
+    "@language": "en",
+    "@vocab": "http://schema.org/",
+    "sc": "http://schema.org/",
+    "schema": "http://schema.org/",
+    "cr": "http://mlcommons.org/croissant/",
+    "dct": "http://purl.org/dc/terms/",
+    "prov": "http://www.w3.org/ns/prov#",
+    "dataBiases": "cr:dataBiases",
+    "dataCollection": "cr:dataCollection",
+    "personalSensitiveInformation": "cr:personalSensitiveInformation",
+    "conformsTo": "dct:conformsTo",
+    "recordSet": "cr:recordSet",
+    "field": "cr:field",
+    "dataType": {"@id": "cr:dataType", "@type": "@vocab"},
+    "source": "cr:source",
+    "extract": "cr:extract",
+    "transform": "cr:transform",
+    "fileObject": "cr:fileObject",
+    "column": "cr:column",
+    "references": "cr:references",
+    "repeated": "cr:repeated",
+    "delimiter": "cr:delimiter",
+    "jsonQuery": "cr:jsonQuery",
+    "key": "cr:key",
+    "data": {"@id": "cr:data", "@type": "@json"}
+  },
+  "@type": "schema:Dataset",
+  "schema:name": "Mixed dialect test document",
+  "http://schema.org/description": "Written for the mesa-croissant tests: Croissant 1.0 forms, Hugging Face style RAI terms in cr:, mlcroissant RAI spellings, prefixed and full-IRI keys.",
+  "dct:conformsTo": "http://mlcommons.org/croissant/1.0",
+  "url": "https://example.org/mixed",
+  "license": ["https://spdx.org/licenses/MIT.html", "https://spdx.org/licenses/Apache-2.0.html"],
+  "creator": [
+    "Plain Name",
+    {"@type": "sc:Organization", "name": "Example Lab", "url": "https://example.org/lab"}
+  ],
+  "publisher": {"name": "Example Publisher"},
+  "datePublished": "2024-03-01T10:00:00Z",
+  "keywords": [
+    "plain",
+    {"@type": "DefinedTerm", "name": "soil", "termCode": "ENVO:00001998"},
+    {"@type": "DefinedTerm", "name": "biome", "url": "http://purl.obolibrary.org/obo/ENVO_00000428"}
+  ],
+  "inLanguage": "en",
+  "isLiveDataset": true,
+  "dataCollection": "Scraped from a test fixture.",
+  "dataBiases": "None known.",
+  "personalSensitiveInformation": ["No names.", "No locations."],
+  "rai:dataCollectionTimeFrame": ["2024-01-01", "2024-02-01"],
+  "http://mlcommons.org/croissant/RAI/dataDataManipulationProtocol": "Deduplicated.",
+  "prov:wasDerivedFrom": [{"@type": "prov:Entity", "@id": "src", "prov:locatedAt": "https://example.org/source"}],
+  "funder": "not represented",
+  "distribution": [
+    {"@type": "cr:FileObject", "@id": "table.csv", "contentUrl": "https://example.org/table.csv",
+     "encodingFormat": "text/csv", "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+     "contentSize": "2048 B"},
+    {"@type": "cr:FileObject", "@id": "items.json", "contentUrl": "https://example.org/items.json",
+     "encodingFormat": "application/json", "md5": "00000000000000000000000000000000"}
+  ],
+  "recordSet": [
+    {
+      "@type": "cr:RecordSet",
+      "@id": "colors",
+      "key": {"@id": "colors/name"},
+      "field": [{"@type": "cr:Field", "@id": "colors/name", "dataType": "sc:Text"}],
+      "data": [{"colors/name": "red"}, {"colors/name": "blue"}]
+    },
+    {
+      "@type": "cr:RecordSet",
+      "@id": "table",
+      "field": [
+        {"@type": "cr:Field", "@id": "table/tags", "name": "tags", "dataType": "Text",
+         "repeated": true,
+         "source": {"fileObject": {"@id": "table.csv"}, "extract": {"column": "tags"},
+                    "transform": {"delimiter": ";"}}},
+        {"@type": "cr:Field", "@id": "table/color", "name": "color", "dataType": "https://schema.org/Text",
+         "references": {"@id": "colors/name"},
+         "source": {"fileObject": {"@id": "table.csv"}, "extract": {"column": "color"}}},
+        {"@type": "cr:Field", "@id": "table/meta", "name": "meta",
+         "subField": [
+           {"@type": "cr:Field", "@id": "table/meta/a", "name": "a", "dataType": "sc:Integer",
+            "source": {"fileObject": {"@id": "table.csv"}, "extract": {"column": "a"}},
+            "subField": [{"@type": "cr:Field", "@id": "table/meta/a/deep", "name": "deep", "dataType": "sc:Text"}]}
+         ]}
+      ]
+    },
+    {
+      "@type": "cr:RecordSet",
+      "@id": "items",
+      "field": [
+        {"@type": "cr:Field", "@id": "items/title", "name": "title", "dataType": "sc:Text",
+         "source": {"fileObject": {"@id": "items.json"}, "transform": {"jsonQuery": "$.items[*].title"}}}
+      ]
+    }
+  ]
+}

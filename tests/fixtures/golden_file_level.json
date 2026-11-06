@@ -1,0 +1,242 @@
+{
+  "case": "file_level",
+  "description": "A document generated for one file (section 5.1): the file is the only FileObject; contentUrl, contentSize and md5 come from the item (Data Store stat).",
+  "item": {
+    "path": "/iplant/home/shared/mesa/demo/ratings.csv",
+    "name": "ratings.csv",
+    "is_folder": false,
+    "size": 12345,
+    "md5": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "avus": [
+    {
+      "attribute": "croissant.name",
+      "value": "Demo ratings (single file)",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.description",
+      "value": "One CSV file of movie ratings.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.license.1",
+      "value": "https://spdx.org/licenses/CC0-1.0.html",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.creator.1.name",
+      "value": "Jane Doe",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.datePublished",
+      "value": "2026-11-06",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.file.description",
+      "value": "Ratings, one row per user and movie.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.id",
+      "value": "ratings",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.1.name",
+      "value": "user_id",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.1.dataType",
+      "value": "cr:Int64",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.1.column",
+      "value": "userId",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.2.name",
+      "value": "movie_id",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.2.dataType",
+      "value": "cr:Int64",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.2.column",
+      "value": "movieId",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.3.name",
+      "value": "rating",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.3.dataType",
+      "value": "sc:Float",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.3.column",
+      "value": "rating",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.title.1.value",
+      "value": "Ignored: croissant.name wins",
+      "unit": ""
+    }
+  ],
+  "document": {
+    "@context": {
+      "@language": "en",
+      "@vocab": "https://schema.org/",
+      "sc": "https://schema.org/",
+      "cr": "http://mlcommons.org/croissant/",
+      "rai": "http://mlcommons.org/croissant/RAI/",
+      "dct": "http://purl.org/dc/terms/",
+      "annotation": "cr:annotation",
+      "arrayShape": "cr:arrayShape",
+      "citeAs": "cr:citeAs",
+      "column": "cr:column",
+      "conformsTo": "dct:conformsTo",
+      "containedIn": "cr:containedIn",
+      "data": {
+        "@id": "cr:data",
+        "@type": "@json"
+      },
+      "dataType": {
+        "@id": "cr:dataType",
+        "@type": "@vocab"
+      },
+      "equivalentProperty": "cr:equivalentProperty",
+      "examples": {
+        "@id": "cr:examples",
+        "@type": "@json"
+      },
+      "excludes": "cr:excludes",
+      "extract": "cr:extract",
+      "field": "cr:field",
+      "fileProperty": "cr:fileProperty",
+      "fileObject": "cr:fileObject",
+      "fileSet": "cr:fileSet",
+      "format": "cr:format",
+      "includes": "cr:includes",
+      "isArray": "cr:isArray",
+      "isLiveDataset": "cr:isLiveDataset",
+      "jsonPath": "cr:jsonPath",
+      "key": "cr:key",
+      "md5": "cr:md5",
+      "parentField": "cr:parentField",
+      "recordSet": "cr:recordSet",
+      "references": "cr:references",
+      "regex": "cr:regex",
+      "readLines": "cr:readLines",
+      "sdVersion": "cr:sdVersion",
+      "separator": "cr:separator",
+      "source": "cr:source",
+      "subField": "cr:subField",
+      "transform": "cr:transform",
+      "unArchive": "cr:unArchive",
+      "value": "cr:value",
+      "geocr": "http://mlcommons.org/croissant/geo/",
+      "prov": "http://www.w3.org/ns/prov#"
+    },
+    "@type": "sc:Dataset",
+    "conformsTo": "http://mlcommons.org/croissant/1.1",
+    "name": "Demo ratings (single file)",
+    "description": "One CSV file of movie ratings.",
+    "license": "https://spdx.org/licenses/CC0-1.0.html",
+    "url": "https://mesa.cyverse.org/data/metadata/page/?path=/iplant/home/shared/mesa/demo/ratings.csv&type=file",
+    "creator": {
+      "@type": "sc:Person",
+      "name": "Jane Doe"
+    },
+    "datePublished": "2026-11-06",
+    "distribution": [
+      {
+        "@type": "cr:FileObject",
+        "@id": "ratings.csv",
+        "name": "ratings.csv",
+        "description": "Ratings, one row per user and movie.",
+        "contentUrl": "https://data.cyverse.org/dav-anon/iplant/home/shared/mesa/demo/ratings.csv",
+        "encodingFormat": "text/csv",
+        "contentSize": "12345 B",
+        "md5": "d41d8cd98f00b204e9800998ecf8427e"
+      }
+    ],
+    "recordSet": [
+      {
+        "@type": "cr:RecordSet",
+        "@id": "ratings",
+        "name": "ratings",
+        "field": [
+          {
+            "@type": "cr:Field",
+            "@id": "ratings/user_id",
+            "name": "user_id",
+            "dataType": "cr:Int64",
+            "source": {
+              "fileObject": {
+                "@id": "ratings.csv"
+              },
+              "extract": {
+                "column": "userId"
+              }
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "ratings/movie_id",
+            "name": "movie_id",
+            "dataType": "cr:Int64",
+            "source": {
+              "fileObject": {
+                "@id": "ratings.csv"
+              },
+              "extract": {
+                "column": "movieId"
+              }
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "ratings/rating",
+            "name": "rating",
+            "dataType": "sc:Float",
+            "source": {
+              "fileObject": {
+                "@id": "ratings.csv"
+              },
+              "extract": {
+                "column": "rating"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "sources": {
+    "conformsTo": "auto",
+    "name": "croissant",
+    "description": "croissant",
+    "license": "croissant",
+    "url": "default",
+    "creator": "croissant",
+    "datePublished": "croissant",
+    "distribution": "item",
+    "recordSet": "croissant"
+  },
+  "valid": true,
+  "mlcroissant": "complete",
+  "roundtrip": false
+}

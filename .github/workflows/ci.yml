@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # core.py promises no runtime dependencies: test it without mesa-mcp or mlcroissant
+  # (tests/test_mcp_tools.py and tests/test_mlcroissant_compat.py skip themselves).
+  core:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: pytest
+
+  # The MESA-MCP plugin against a pinned mesa-mcp release (public repo, not on PyPI).
+  plugin:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    env:
+      MESA_MCP_REF: v0.2.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip
+      - run: pip install "mesa-mcp @ git+https://github.com/idss-mesa/mesa-mcp@${MESA_MCP_REF}"
+      - run: pip install -e ".[dev,mcp]" jsonschema
+      # Fail loudly instead of skipping when the plugin cannot be imported.
+      - run: python -c "import mesa_mcp, mesa_croissant.mcp_tools"
+      - name: mesa-mcp discovers the plugin
+        run: |
+          python - <<'PY'
+          from mesa_mcp.server import get_tool, load_plugins
+          status = load_plugins(strict=True)
+          assert status.get("croissant") == "loaded", status
+          assert get_tool("mesa_croissant_apply").meta["io.mesa/surface"] == "croissant"
+          PY
+      - run: pytest tests/test_mcp_tools.py -rs
+      - run: pytest
+
+  # Optional full MLCommons check of the golden documents (pinned: the compat notes are
+  # written against mlcroissant 1.1.1).
+  mlcroissant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]" "mlcroissant==1.1.1"
+      - run: pytest tests/test_mlcroissant_compat.py -rs

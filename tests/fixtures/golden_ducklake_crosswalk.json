@@ -1,0 +1,562 @@
+{
+  "case": "ducklake_crosswalk",
+  "description": "A MESA DuckLake folder (mesa.enabled) whose dataset properties come only from the section-7 crosswalk (datacite.*, ontology AVUs, mesa.generated_by); only distribution and recordSet are croissant.* AVUs.",
+  "item": {
+    "path": "/iplant/home/shared/mesa/lakehouse/srer/srer-ducklake",
+    "name": "srer-ducklake",
+    "is_folder": true
+  },
+  "avus": [
+    {
+      "attribute": "mesa.enabled",
+      "value": "true",
+      "unit": ""
+    },
+    {
+      "attribute": "ipc_UUID",
+      "value": "c0ffee00-0000-4000-8000-000000000001",
+      "unit": ""
+    },
+    {
+      "attribute": "mesa.generated_by",
+      "value": "https://github.com/idss-mesa/neon-ducklake",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.identifier",
+      "value": "10.25739/mesa-srer-0001",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.identifierType",
+      "value": "DOI",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.title.1.value",
+      "value": "SRER micrometeorology DuckLake",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.description.1.value",
+      "value": "Half-hourly micrometeorology from the Santa Rita Experimental Range, stored as a DuckLake.",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.creator.1.name",
+      "value": "Doe, Jane",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.creator.1.nameType",
+      "value": "Personal",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.creator.1.orcid",
+      "value": "0000-0002-1825-0097",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.creator.1.affiliation",
+      "value": "University of New Mexico",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.creator.2.name",
+      "value": "MESA",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.creator.2.nameType",
+      "value": "Organizational",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.publisher",
+      "value": "CyVerse",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.publicationYear",
+      "value": "2026",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.rights.1.value",
+      "value": "Creative Commons Attribution 4.0 International",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.rights.1.rightsURI",
+      "value": "https://creativecommons.org/licenses/by/4.0/",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.version",
+      "value": "1.2.0",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.subject.1.value",
+      "value": "micrometeorology",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.date.1.date",
+      "value": "2019-01-01/2023-12-31",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.date.1.dateType",
+      "value": "Collected",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.geoLocation.1.place",
+      "value": "Santa Rita Experimental Range",
+      "unit": ""
+    },
+    {
+      "attribute": "datacite.geoLocation.1.box",
+      "value": "31.75,-111.0,31.90,-110.80",
+      "unit": ""
+    },
+    {
+      "attribute": "envo.grassland_biome",
+      "value": "grassland biome",
+      "unit": "ENVO:01000177"
+    },
+    {
+      "attribute": "croissant.distribution.1.id",
+      "value": "srer-catalog",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.1.name",
+      "value": "srer.ducklake",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.1.description",
+      "value": "DuckLake catalog (DuckDB file).",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.1.contentUrl",
+      "value": "ducklake/srer.ducklake",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.1.encodingFormat",
+      "value": "application/x-ducklake",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.1.contentSize",
+      "value": "1048576",
+      "unit": "B"
+    },
+    {
+      "attribute": "croissant.distribution.1.md5",
+      "value": "9e107d9d372bb6826bd81d3542a419d6",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.2.id",
+      "value": "ducklake-met_30min",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.2.type",
+      "value": "FileSet",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.2.encodingFormat",
+      "value": "application/x-parquet",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.2.includes.1",
+      "value": "ducklake/data/main/met_30min/**/*.parquet",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.id",
+      "value": "met_30min",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.description",
+      "value": "DuckLake table main.met_30min.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.key.1",
+      "value": "met_30min/site",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.key.2",
+      "value": "met_30min/ts",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.1.name",
+      "value": "site",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.1.dataType",
+      "value": "sc:Text",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.1.source",
+      "value": "ducklake-met_30min",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.1.column",
+      "value": "site",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.2.name",
+      "value": "ts",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.2.description",
+      "value": "TIMESTAMP WITH TIME ZONE",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.2.dataType",
+      "value": "sc:DateTime",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.2.source",
+      "value": "ducklake-met_30min",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.2.column",
+      "value": "ts",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.3.name",
+      "value": "air_temp",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.3.dataType",
+      "value": "cr:Float64",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.3.source",
+      "value": "ducklake-met_30min",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.3.column",
+      "value": "air_temp",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.3.equivalentProperty.1",
+      "value": "http://purl.obolibrary.org/obo/ENVO_09200001",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.4.name",
+      "value": "precip",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.4.dataType",
+      "value": "sc:Float",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.4.source",
+      "value": "ducklake-met_30min",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.4.column",
+      "value": "precip",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.5.name",
+      "value": "qc_flags",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.5.dataType",
+      "value": "sc:Text",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.5.source",
+      "value": "ducklake-met_30min",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.5.column",
+      "value": "qc_flags",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.5.isArray",
+      "value": "true",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.5.arrayShape",
+      "value": "-1",
+      "unit": ""
+    }
+  ],
+  "document": {
+    "@context": {
+      "@language": "en",
+      "@vocab": "https://schema.org/",
+      "sc": "https://schema.org/",
+      "cr": "http://mlcommons.org/croissant/",
+      "rai": "http://mlcommons.org/croissant/RAI/",
+      "dct": "http://purl.org/dc/terms/",
+      "annotation": "cr:annotation",
+      "arrayShape": "cr:arrayShape",
+      "citeAs": "cr:citeAs",
+      "column": "cr:column",
+      "conformsTo": "dct:conformsTo",
+      "containedIn": "cr:containedIn",
+      "data": {
+        "@id": "cr:data",
+        "@type": "@json"
+      },
+      "dataType": {
+        "@id": "cr:dataType",
+        "@type": "@vocab"
+      },
+      "equivalentProperty": "cr:equivalentProperty",
+      "examples": {
+        "@id": "cr:examples",
+        "@type": "@json"
+      },
+      "excludes": "cr:excludes",
+      "extract": "cr:extract",
+      "field": "cr:field",
+      "fileProperty": "cr:fileProperty",
+      "fileObject": "cr:fileObject",
+      "fileSet": "cr:fileSet",
+      "format": "cr:format",
+      "includes": "cr:includes",
+      "isArray": "cr:isArray",
+      "isLiveDataset": "cr:isLiveDataset",
+      "jsonPath": "cr:jsonPath",
+      "key": "cr:key",
+      "md5": "cr:md5",
+      "parentField": "cr:parentField",
+      "recordSet": "cr:recordSet",
+      "references": "cr:references",
+      "regex": "cr:regex",
+      "readLines": "cr:readLines",
+      "sdVersion": "cr:sdVersion",
+      "separator": "cr:separator",
+      "source": "cr:source",
+      "subField": "cr:subField",
+      "transform": "cr:transform",
+      "unArchive": "cr:unArchive",
+      "value": "cr:value",
+      "geocr": "http://mlcommons.org/croissant/geo/",
+      "prov": "http://www.w3.org/ns/prov#"
+    },
+    "@type": "sc:Dataset",
+    "conformsTo": "http://mlcommons.org/croissant/1.1",
+    "name": "SRER micrometeorology DuckLake",
+    "description": "Half-hourly micrometeorology from the Santa Rita Experimental Range, stored as a DuckLake.",
+    "license": "https://creativecommons.org/licenses/by/4.0/",
+    "url": "https://doi.org/10.25739/mesa-srer-0001",
+    "identifier": "https://doi.org/10.25739/mesa-srer-0001",
+    "creator": [
+      {
+        "@type": "sc:Person",
+        "name": "Doe, Jane",
+        "identifier": "https://orcid.org/0000-0002-1825-0097",
+        "affiliation": {
+          "@type": "sc:Organization",
+          "name": "University of New Mexico"
+        }
+      },
+      {
+        "@type": "sc:Organization",
+        "name": "MESA"
+      }
+    ],
+    "publisher": {
+      "@type": "sc:Organization",
+      "name": "CyVerse"
+    },
+    "datePublished": "2026",
+    "version": "1.2.0",
+    "keywords": [
+      "micrometeorology",
+      {
+        "@type": "sc:DefinedTerm",
+        "name": "grassland biome",
+        "termCode": "ENVO:01000177"
+      }
+    ],
+    "temporalCoverage": "2019-01-01/2023-12-31",
+    "spatialCoverage": {
+      "@type": "sc:Place",
+      "name": "Santa Rita Experimental Range",
+      "geo": {
+        "@type": "sc:GeoShape",
+        "box": "31.75 -111.0 31.90 -110.80"
+      }
+    },
+    "prov:wasGeneratedBy": {
+      "@id": "https://github.com/idss-mesa/neon-ducklake"
+    },
+    "distribution": [
+      {
+        "@type": "cr:FileObject",
+        "@id": "srer-catalog",
+        "name": "srer.ducklake",
+        "description": "DuckLake catalog (DuckDB file).",
+        "contentUrl": "https://data.cyverse.org/dav-anon/iplant/home/shared/mesa/lakehouse/srer/srer-ducklake/ducklake/srer.ducklake",
+        "encodingFormat": "application/x-ducklake",
+        "contentSize": "1048576 B",
+        "md5": "9e107d9d372bb6826bd81d3542a419d6"
+      },
+      {
+        "@type": "cr:FileSet",
+        "@id": "ducklake-met_30min",
+        "name": "ducklake-met_30min",
+        "encodingFormat": "application/x-parquet",
+        "includes": "ducklake/data/main/met_30min/**/*.parquet"
+      }
+    ],
+    "recordSet": [
+      {
+        "@type": "cr:RecordSet",
+        "@id": "met_30min",
+        "name": "met_30min",
+        "description": "DuckLake table main.met_30min.",
+        "key": [
+          {
+            "@id": "met_30min/site"
+          },
+          {
+            "@id": "met_30min/ts"
+          }
+        ],
+        "field": [
+          {
+            "@type": "cr:Field",
+            "@id": "met_30min/site",
+            "name": "site",
+            "dataType": "sc:Text",
+            "source": {
+              "fileSet": {
+                "@id": "ducklake-met_30min"
+              },
+              "extract": {
+                "column": "site"
+              }
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "met_30min/ts",
+            "name": "ts",
+            "description": "TIMESTAMP WITH TIME ZONE",
+            "dataType": "sc:DateTime",
+            "source": {
+              "fileSet": {
+                "@id": "ducklake-met_30min"
+              },
+              "extract": {
+                "column": "ts"
+              }
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "met_30min/air_temp",
+            "name": "air_temp",
+            "dataType": "cr:Float64",
+            "equivalentProperty": "http://purl.obolibrary.org/obo/ENVO_09200001",
+            "source": {
+              "fileSet": {
+                "@id": "ducklake-met_30min"
+              },
+              "extract": {
+                "column": "air_temp"
+              }
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "met_30min/precip",
+            "name": "precip",
+            "dataType": "sc:Float",
+            "source": {
+              "fileSet": {
+                "@id": "ducklake-met_30min"
+              },
+              "extract": {
+                "column": "precip"
+              }
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "met_30min/qc_flags",
+            "name": "qc_flags",
+            "dataType": "sc:Text",
+            "isArray": true,
+            "arrayShape": "-1",
+            "source": {
+              "fileSet": {
+                "@id": "ducklake-met_30min"
+              },
+              "extract": {
+                "column": "qc_flags"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "sources": {
+    "conformsTo": "auto",
+    "name": "datacite.title.1.value",
+    "description": "datacite.description.1.value",
+    "license": "datacite.rights.1.rightsURI",
+    "url": "datacite.identifier",
+    "identifier": "datacite.identifier",
+    "creator": "datacite.creator.1.name",
+    "publisher": "datacite.publisher",
+    "datePublished": "datacite.publicationYear",
+    "version": "datacite.version",
+    "keywords": "datacite.subject.1.value+ontology",
+    "temporalCoverage": "datacite.date.1.date",
+    "spatialCoverage": "datacite.geoLocation.1.box",
+    "prov:wasGeneratedBy": "mesa.generated_by",
+    "distribution": "croissant",
+    "recordSet": "croissant"
+  },
+  "valid": true,
+  "mlcroissant": "complete",
+  "roundtrip": false
+}

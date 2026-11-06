@@ -1,0 +1,33 @@
+Upstream Croissant example documents
+====================================
+
+The JSON files in this directory are unmodified copies of example metadata from
+the MLCommons Croissant repository:
+
+  https://github.com/mlcommons/croissant
+  commit 24636299c4ecf80f4c408256b7444712390599ad (main, 2026-11-06)
+
+  v1.1_huggingface-squad_v2.json  <- datasets/1.1/huggingface-squad_v2/metadata.json
+  v1.1_huggingface-mnist.json     <- datasets/1.1/huggingface-mnist-from-main-branch/metadata.json
+  v1.1_zenodo-head-mri.json       <- datasets/1.1/zenodo-head-mri/metadata.json
+  v1.0_titanic.json               <- datasets/1.0/titanic/metadata.json
+  v1.0_movielens.json             <- datasets/1.0/movielens/metadata.json
+  v0.8_titanic.json               <- datasets/0.8/titanic/metadata.json
+
+Raw URLs have the form
+  https://raw.githubusercontent.com/mlcommons/croissant/24636299c4ecf80f4c408256b7444712390599ad/<path>
+
+Copyright MLCommons Association and contributors. Licensed under the Apache
+License, Version 2.0 (the "License"); you may not use these files except in
+compliance with the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+They are used only as test input for the importer (mesa_croissant.core.from_jsonld).
+The documents in ../import/ were written for this repository and are not
+copied from any other project.

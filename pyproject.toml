@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mesa-croissant"
+version = "1.3.0"
+description = "MLCommons Croissant metadata as CyVerse Data Store AVUs for MESA: codec, generator, importer and validator, plus MESA-MCP tools."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    { name = "MESA contributors" },
+]
+keywords = ["croissant", "mlcommons", "json-ld", "irods", "cyverse", "avu", "mesa"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+# mesa_croissant.core is pure standard library: no runtime dependencies.
+dependencies = []
+
+[project.optional-dependencies]
+# MESA-MCP plugin (mesa_croissant.mcp_tools). Needs the mesa_mcp.tools entry-point loader
+# (idss-mesa/mesa-mcp PR #6). mesa-mcp is not on PyPI: install it from its checkout or
+#   pip install "mesa-mcp @ git+https://github.com/idss-mesa/mesa-mcp"
+# first, then this package with [mcp].
+mcp = [
+    "mesa-mcp>=0.1",
+    "pydantic>=2.6",
+]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+# MESA-MCP tool plugin: mesa-mcp imports this module at start-up (load_plugins) and the
+# mesa_croissant_* tools register themselves with surface "croissant".
+[project.entry-points."mesa_mcp.tools"]
+croissant = "mesa_croissant.mcp_tools"
+
+[project.urls]
+Homepage = "https://github.com/idss-mesa/mesa-croissant"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mesa_croissant"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = []
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "-ra"

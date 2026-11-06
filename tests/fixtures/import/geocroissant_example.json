@@ -1,0 +1,85 @@
+{
+  "@context": {
+    "@language": "en",
+    "@vocab": "https://schema.org/",
+    "sc": "https://schema.org/",
+    "cr": "http://mlcommons.org/croissant/",
+    "rai": "http://mlcommons.org/croissant/RAI/",
+    "dct": "http://purl.org/dc/terms/",
+    "geocr": "http://mlcommons.org/croissant/geo/",
+    "conformsTo": "dct:conformsTo",
+    "citeAs": "cr:citeAs",
+    "recordSet": "cr:recordSet",
+    "field": "cr:field",
+    "dataType": {"@id": "cr:dataType", "@type": "@vocab"},
+    "source": "cr:source",
+    "extract": "cr:extract",
+    "fileSet": "cr:fileSet",
+    "fileObject": "cr:fileObject",
+    "fileProperty": "cr:fileProperty",
+    "column": "cr:column",
+    "includes": "cr:includes",
+    "isArray": "cr:isArray",
+    "arrayShape": "cr:arrayShape",
+    "md5": "cr:md5"
+  },
+  "@type": "Dataset",
+  "name": "Sonoran Desert NDVI tiles (MESA test example)",
+  "description": "Written for the mesa-croissant tests from the GeoCroissant 1.0 property list; not a real dataset.",
+  "conformsTo": [
+    "http://mlcommons.org/croissant/1.1",
+    "http://mlcommons.org/croissant/geo/1.0"
+  ],
+  "url": "https://example.org/datasets/sonoran-ndvi",
+  "license": {"@type": "CreativeWork", "name": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
+  "creator": {"@type": "Person", "givenName": "Ana", "familyName": "Garcia", "sameAs": "https://orcid.org/0000-0001-2345-6789"},
+  "datePublished": "2026-03-01",
+  "version": 2,
+  "keywords": "NDVI",
+  "spatialCoverage": {
+    "@type": "Place",
+    "name": "Sonoran Desert",
+    "geo": [
+      {"@type": "GeoShape", "box": "31.0,-114.0,34.0,-110.5"},
+      {"@type": "GeoCoordinates", "latitude": 32.5, "longitude": -112.25}
+    ]
+  },
+  "temporalCoverage": "2020-01-01/2024-12-31",
+  "geocr:coordinateReferenceSystem": "EPSG:4326",
+  "geocr:spatialResolution": {"@type": "QuantitativeValue", "value": 250, "unitText": "m"},
+  "geocr:temporalResolution": "16 day",
+  "http://mlcommons.org/croissant/geo/1.0/samplingStrategy": "All cloud-free 16-day composites.",
+  "geocr:bandConfiguration": {
+    "@type": "geocr:BandConfiguration",
+    "geocr:totalBands": 1,
+    "geocr:bandNameList": "NDVI"
+  },
+  "geocr:spectralBandMetadata": [
+    {"@type": "geocr:SpectralBand", "name": "NDVI"}
+  ],
+  "distribution": [
+    {
+      "@type": "cr:FileSet",
+      "@id": "tiles",
+      "name": "tiles",
+      "encodingFormat": "image/tiff",
+      "includes": "tiles/*.tif"
+    }
+  ],
+  "recordSet": [
+    {
+      "@type": "cr:RecordSet",
+      "@id": "ndvi",
+      "field": [
+        {
+          "@type": "cr:Field",
+          "@id": "ndvi/image",
+          "dataType": "ImageObject",
+          "isArray": true,
+          "arrayShape": [1, 512, 512],
+          "source": {"fileSet": {"@id": "tiles"}, "extract": {"fileProperty": "content"}}
+        }
+      ]
+    }
+  ]
+}

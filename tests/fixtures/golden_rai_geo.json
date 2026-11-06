@@ -1,0 +1,1103 @@
+{
+  "case": "rai_geo",
+  "description": "Every dataset, RAI 1.0 and GeoCroissant 1.0 key, FileSet and FileObject, three record sets with inline data, references, transforms, formats, arrays and one level of subFields.",
+  "item": {
+    "path": "/iplant/home/shared/mesa/datasets/srer-uav-chips",
+    "name": "srer-uav-chips",
+    "is_folder": true
+  },
+  "avus": [
+    {
+      "attribute": "croissant.name",
+      "value": "SRER UAV image chips",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.alternateName",
+      "value": "srer-uav-chips",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.description",
+      "value": "512 x 512 four-band UAV orthomosaic chips of the Santa Rita Experimental Range with shrub-cover labels, split into train and validation.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.url",
+      "value": "https://doi.org/10.25739/mesa-srer-0002",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.license.1",
+      "value": "https://creativecommons.org/licenses/by/4.0/",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.creator.1.name",
+      "value": "Jane Doe",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.creator.1.email",
+      "value": "jane.doe@example.org",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.creator.1.identifier",
+      "value": "https://orcid.org/0000-0002-1825-0097",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.creator.1.affiliation",
+      "value": "University of New Mexico",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.creator.2.name",
+      "value": "MESA",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.creator.2.type",
+      "value": "Organization",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.creator.2.url",
+      "value": "https://idss-mesa.github.io/",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.publisher.1.name",
+      "value": "CyVerse",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.publisher.1.type",
+      "value": "Organization",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.publisher.1.identifier",
+      "value": "https://ror.org/03m2x1q45",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.datePublished",
+      "value": "2026-10-01",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.dateCreated",
+      "value": "2026-06-15",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.dateModified",
+      "value": "2026-10-02T08:30:00Z",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.version",
+      "value": "1.0.0",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.citeAs",
+      "value": "@misc{srer_uav_chips_2026, title={SRER UAV image chips}, author={Doe, Jane}, year={2026}}",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.keyword.1",
+      "value": "UAV",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.keyword.2",
+      "value": "shrub cover",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.inLanguage.1",
+      "value": "en",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.sameAs.1",
+      "value": "https://mesa.cyverse.org/data/?path=/iplant/home/shared/mesa/datasets/srer-uav-chips",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.identifier",
+      "value": "https://doi.org/10.25739/mesa-srer-0002",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.isLiveDataset",
+      "value": "false",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.sdVersion",
+      "value": "1.0",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.sdLicense",
+      "value": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.temporalCoverage",
+      "value": "2019-01-01/2023-12-31",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.wasGeneratedBy",
+      "value": "UAV survey and manual shrub annotation (MESA field campaign 2023)",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.wasDerivedFrom.1",
+      "value": "https://doi.org/10.25739/mesa-srer-0001",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataCollection",
+      "value": "Multispectral UAV flights at 60 m above ground, 2019-2023.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataCollectionType.1",
+      "value": "Direct measurement",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataCollectionType.2",
+      "value": "Manual human curation",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataCollectionMissingData",
+      "value": "Chips with more than 5% cloud shadow were dropped.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataCollectionTimeframe.1",
+      "value": "2019-04-01T00:00:00Z",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataCollectionTimeframe.2",
+      "value": "2023-10-31T23:59:59Z",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataPreprocessingProtocol.1",
+      "value": "Orthorectified and radiometrically calibrated.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataAnnotationProtocol",
+      "value": "Two annotators labelled each chip; disagreements were reviewed.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataAnnotationPlatform.1",
+      "value": "QGIS",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataReleaseMaintenancePlan.1",
+      "value": "Versioned yearly; errata on the MESA portal.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.personalSensitiveInformation.1",
+      "value": "None: no people or private property are identifiable.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataBiases.1",
+      "value": "Flights favour clear spring mornings.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataLimitations.1",
+      "value": "Covers one experimental range only.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.dataUseCases.1",
+      "value": "Training shrub-cover segmentation models.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.rai.annotationsPerItem",
+      "value": "2",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.geo.spatialCoverage.name",
+      "value": "Santa Rita Experimental Range, Arizona",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.geo.spatialCoverage.box",
+      "value": "31.75 -111.0 31.9 -110.8",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.geo.coordinateReferenceSystem",
+      "value": "EPSG:32612",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.geo.spatialResolution",
+      "value": "0.05",
+      "unit": "m"
+    },
+    {
+      "attribute": "croissant.geo.temporalResolution",
+      "value": "1",
+      "unit": "year"
+    },
+    {
+      "attribute": "croissant.geo.samplingStrategy",
+      "value": "Stratified random 512 x 512 chips over the survey blocks.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.geo.spatialBias",
+      "value": "Road-accessible blocks are over-represented.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.geo.recordEndpoint",
+      "value": "https://example.org/ogcapi/collections/srer-uav-chips/items",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.geo.bandConfiguration.totalBands",
+      "value": "4",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.geo.bandConfiguration.band.1",
+      "value": "Red",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.geo.bandConfiguration.band.2",
+      "value": "Green",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.geo.bandConfiguration.band.3",
+      "value": "Blue",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.geo.bandConfiguration.band.4",
+      "value": "NIR",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.1.id",
+      "value": "chips",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.1.type",
+      "value": "FileSet",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.1.description",
+      "value": "GeoTIFF chips.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.1.encodingFormat",
+      "value": "image/tiff",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.1.includes.1",
+      "value": "data/chips/**/*.tif",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.1.excludes.1",
+      "value": "data/chips/**/*_preview.tif",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.2.id",
+      "value": "labels.csv",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.2.contentUrl",
+      "value": "data/labels.csv",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.2.encodingFormat",
+      "value": "text/csv",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.2.contentSize",
+      "value": "20480",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.distribution.2.sha256",
+      "value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.id",
+      "value": "splits",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.description",
+      "value": "Split names.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.dataType",
+      "value": "cr:Split",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.key.1",
+      "value": "splits/name",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.data",
+      "value": "[{\"splits/name\":\"train\"},{\"splits/name\":\"validation\"}]",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.1.name",
+      "value": "name",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.1.field.1.dataType",
+      "value": "sc:Text",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.id",
+      "value": "images",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.name",
+      "value": "Image chips",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.1.name",
+      "value": "image",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.1.description",
+      "value": "Four-band chip.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.1.dataType",
+      "value": "sc:ImageObject",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.1.source",
+      "value": "chips",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.1.fileProperty",
+      "value": "content",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.1.isArray",
+      "value": "true",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.1.arrayShape",
+      "value": "512,512,4",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.2.name",
+      "value": "filename",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.2.dataType",
+      "value": "sc:Text",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.2.source",
+      "value": "chips",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.2.fileProperty",
+      "value": "filename",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.3.name",
+      "value": "split",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.3.dataType",
+      "value": "sc:Text",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.3.source",
+      "value": "chips",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.3.fileProperty",
+      "value": "fullpath",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.3.regex",
+      "value": "^data/chips/(train|validation)/.*\\.tif$",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.2.field.3.references",
+      "value": "splits/name",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.id",
+      "value": "labels",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.1.name",
+      "value": "chip",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.1.dataType",
+      "value": "sc:Text",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.1.source",
+      "value": "labels.csv",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.1.column",
+      "value": "chip",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.1.references",
+      "value": "images/filename",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.2.name",
+      "value": "shrub_cover",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.2.dataType.1",
+      "value": "sc:Float",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.2.dataType.2",
+      "value": "http://purl.obolibrary.org/obo/PATO_0001323",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.2.source",
+      "value": "labels.csv",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.2.column",
+      "value": "cover",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.2.format",
+      "value": "0.00",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.3.name",
+      "value": "observed",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.3.dataType",
+      "value": "sc:Date",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.3.source",
+      "value": "labels.csv",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.3.column",
+      "value": "date",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.3.format",
+      "value": "yyyy-MM-dd",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.4.name",
+      "value": "annotators",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.4.description",
+      "value": "Annotator ids, separated by '|'.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.4.dataType",
+      "value": "sc:Text",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.4.source",
+      "value": "labels.csv",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.4.column",
+      "value": "annotators",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.4.separator",
+      "value": "|",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.4.isArray",
+      "value": "true",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.4.arrayShape",
+      "value": "-1",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.5.name",
+      "value": "centroid",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.5.description",
+      "value": "Chip centre.",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.5.subField.1.name",
+      "value": "lat",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.5.subField.1.dataType",
+      "value": "cr:Float64",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.5.subField.1.source",
+      "value": "labels.csv",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.5.subField.1.column",
+      "value": "lat",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.5.subField.2.name",
+      "value": "lon",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.5.subField.2.dataType",
+      "value": "cr:Float64",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.5.subField.2.source",
+      "value": "labels.csv",
+      "unit": ""
+    },
+    {
+      "attribute": "croissant.recordSet.3.field.5.subField.2.column",
+      "value": "lon",
+      "unit": ""
+    }
+  ],
+  "document": {
+    "@context": {
+      "@language": "en",
+      "@vocab": "https://schema.org/",
+      "sc": "https://schema.org/",
+      "cr": "http://mlcommons.org/croissant/",
+      "rai": "http://mlcommons.org/croissant/RAI/",
+      "dct": "http://purl.org/dc/terms/",
+      "annotation": "cr:annotation",
+      "arrayShape": "cr:arrayShape",
+      "citeAs": "cr:citeAs",
+      "column": "cr:column",
+      "conformsTo": "dct:conformsTo",
+      "containedIn": "cr:containedIn",
+      "data": {
+        "@id": "cr:data",
+        "@type": "@json"
+      },
+      "dataType": {
+        "@id": "cr:dataType",
+        "@type": "@vocab"
+      },
+      "equivalentProperty": "cr:equivalentProperty",
+      "examples": {
+        "@id": "cr:examples",
+        "@type": "@json"
+      },
+      "excludes": "cr:excludes",
+      "extract": "cr:extract",
+      "field": "cr:field",
+      "fileProperty": "cr:fileProperty",
+      "fileObject": "cr:fileObject",
+      "fileSet": "cr:fileSet",
+      "format": "cr:format",
+      "includes": "cr:includes",
+      "isArray": "cr:isArray",
+      "isLiveDataset": "cr:isLiveDataset",
+      "jsonPath": "cr:jsonPath",
+      "key": "cr:key",
+      "md5": "cr:md5",
+      "parentField": "cr:parentField",
+      "recordSet": "cr:recordSet",
+      "references": "cr:references",
+      "regex": "cr:regex",
+      "readLines": "cr:readLines",
+      "sdVersion": "cr:sdVersion",
+      "separator": "cr:separator",
+      "source": "cr:source",
+      "subField": "cr:subField",
+      "transform": "cr:transform",
+      "unArchive": "cr:unArchive",
+      "value": "cr:value",
+      "geocr": "http://mlcommons.org/croissant/geo/",
+      "prov": "http://www.w3.org/ns/prov#"
+    },
+    "@type": "sc:Dataset",
+    "conformsTo": [
+      "http://mlcommons.org/croissant/1.1",
+      "http://mlcommons.org/croissant/RAI/1.0",
+      "http://mlcommons.org/croissant/geo/1.0"
+    ],
+    "name": "SRER UAV image chips",
+    "alternateName": "srer-uav-chips",
+    "description": "512 x 512 four-band UAV orthomosaic chips of the Santa Rita Experimental Range with shrub-cover labels, split into train and validation.",
+    "license": "https://creativecommons.org/licenses/by/4.0/",
+    "url": "https://doi.org/10.25739/mesa-srer-0002",
+    "identifier": "https://doi.org/10.25739/mesa-srer-0002",
+    "creator": [
+      {
+        "@type": "sc:Person",
+        "name": "Jane Doe",
+        "email": "jane.doe@example.org",
+        "identifier": "https://orcid.org/0000-0002-1825-0097",
+        "affiliation": {
+          "@type": "sc:Organization",
+          "name": "University of New Mexico"
+        }
+      },
+      {
+        "@type": "sc:Organization",
+        "name": "MESA",
+        "url": "https://idss-mesa.github.io/"
+      }
+    ],
+    "publisher": {
+      "@type": "sc:Organization",
+      "name": "CyVerse",
+      "identifier": "https://ror.org/03m2x1q45"
+    },
+    "datePublished": "2026-10-01",
+    "dateCreated": "2026-06-15",
+    "dateModified": "2026-10-02T08:30:00Z",
+    "version": "1.0.0",
+    "citeAs": "@misc{srer_uav_chips_2026, title={SRER UAV image chips}, author={Doe, Jane}, year={2026}}",
+    "keywords": [
+      "UAV",
+      "shrub cover"
+    ],
+    "inLanguage": "en",
+    "sameAs": "https://mesa.cyverse.org/data/?path=/iplant/home/shared/mesa/datasets/srer-uav-chips",
+    "isLiveDataset": false,
+    "sdVersion": "1.0",
+    "sdLicense": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "temporalCoverage": "2019-01-01/2023-12-31",
+    "spatialCoverage": {
+      "@type": "sc:Place",
+      "name": "Santa Rita Experimental Range, Arizona",
+      "geo": {
+        "@type": "sc:GeoShape",
+        "box": "31.75 -111.0 31.9 -110.8"
+      }
+    },
+    "geocr:coordinateReferenceSystem": "EPSG:32612",
+    "geocr:spatialResolution": {
+      "@type": "sc:QuantitativeValue",
+      "sc:value": 0.05,
+      "unitText": "m"
+    },
+    "geocr:temporalResolution": {
+      "@type": "sc:QuantitativeValue",
+      "sc:value": 1,
+      "unitText": "year"
+    },
+    "geocr:samplingStrategy": "Stratified random 512 x 512 chips over the survey blocks.",
+    "geocr:spatialBias": "Road-accessible blocks are over-represented.",
+    "geocr:recordEndpoint": "https://example.org/ogcapi/collections/srer-uav-chips/items",
+    "geocr:bandConfiguration": {
+      "@type": "geocr:BandConfiguration",
+      "geocr:totalBands": 4,
+      "geocr:bandNameList": [
+        "Red",
+        "Green",
+        "Blue",
+        "NIR"
+      ]
+    },
+    "rai:dataCollection": "Multispectral UAV flights at 60 m above ground, 2019-2023.",
+    "rai:dataCollectionType": [
+      "Direct measurement",
+      "Manual human curation"
+    ],
+    "rai:dataCollectionMissingData": "Chips with more than 5% cloud shadow were dropped.",
+    "rai:dataCollectionTimeframe": [
+      "2019-04-01T00:00:00Z",
+      "2023-10-31T23:59:59Z"
+    ],
+    "rai:dataPreprocessingProtocol": "Orthorectified and radiometrically calibrated.",
+    "rai:dataAnnotationProtocol": "Two annotators labelled each chip; disagreements were reviewed.",
+    "rai:dataAnnotationPlatform": "QGIS",
+    "rai:dataReleaseMaintenancePlan": "Versioned yearly; errata on the MESA portal.",
+    "rai:personalSensitiveInformation": "None: no people or private property are identifiable.",
+    "rai:dataBiases": "Flights favour clear spring mornings.",
+    "rai:dataLimitations": "Covers one experimental range only.",
+    "rai:dataUseCases": "Training shrub-cover segmentation models.",
+    "rai:annotationsPerItem": "2",
+    "prov:wasGeneratedBy": {
+      "@type": "prov:Activity",
+      "prov:label": "UAV survey and manual shrub annotation (MESA field campaign 2023)"
+    },
+    "prov:wasDerivedFrom": {
+      "@id": "https://doi.org/10.25739/mesa-srer-0001"
+    },
+    "distribution": [
+      {
+        "@type": "cr:FileSet",
+        "@id": "chips",
+        "name": "chips",
+        "description": "GeoTIFF chips.",
+        "encodingFormat": "image/tiff",
+        "includes": "data/chips/**/*.tif",
+        "excludes": "data/chips/**/*_preview.tif"
+      },
+      {
+        "@type": "cr:FileObject",
+        "@id": "labels.csv",
+        "name": "labels.csv",
+        "contentUrl": "https://data.cyverse.org/dav-anon/iplant/home/shared/mesa/datasets/srer-uav-chips/data/labels.csv",
+        "encodingFormat": "text/csv",
+        "contentSize": "20480 B",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "recordSet": [
+      {
+        "@type": "cr:RecordSet",
+        "@id": "splits",
+        "name": "splits",
+        "description": "Split names.",
+        "dataType": "cr:Split",
+        "key": {
+          "@id": "splits/name"
+        },
+        "field": [
+          {
+            "@type": "cr:Field",
+            "@id": "splits/name",
+            "name": "name",
+            "dataType": "sc:Text"
+          }
+        ],
+        "data": [
+          {
+            "splits/name": "train"
+          },
+          {
+            "splits/name": "validation"
+          }
+        ]
+      },
+      {
+        "@type": "cr:RecordSet",
+        "@id": "images",
+        "name": "Image chips",
+        "field": [
+          {
+            "@type": "cr:Field",
+            "@id": "images/image",
+            "name": "image",
+            "description": "Four-band chip.",
+            "dataType": "sc:ImageObject",
+            "isArray": true,
+            "arrayShape": "512,512,4",
+            "source": {
+              "fileSet": {
+                "@id": "chips"
+              },
+              "extract": {
+                "fileProperty": "content"
+              }
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "images/filename",
+            "name": "filename",
+            "dataType": "sc:Text",
+            "source": {
+              "fileSet": {
+                "@id": "chips"
+              },
+              "extract": {
+                "fileProperty": "filename"
+              }
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "images/split",
+            "name": "split",
+            "dataType": "sc:Text",
+            "references": {
+              "field": {
+                "@id": "splits/name"
+              }
+            },
+            "source": {
+              "fileSet": {
+                "@id": "chips"
+              },
+              "extract": {
+                "fileProperty": "fullpath"
+              },
+              "transform": {
+                "regex": "^data/chips/(train|validation)/.*\\.tif$"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "@type": "cr:RecordSet",
+        "@id": "labels",
+        "name": "labels",
+        "field": [
+          {
+            "@type": "cr:Field",
+            "@id": "labels/chip",
+            "name": "chip",
+            "dataType": "sc:Text",
+            "references": {
+              "field": {
+                "@id": "images/filename"
+              }
+            },
+            "source": {
+              "fileObject": {
+                "@id": "labels.csv"
+              },
+              "extract": {
+                "column": "chip"
+              }
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "labels/shrub_cover",
+            "name": "shrub_cover",
+            "dataType": [
+              "sc:Float",
+              "http://purl.obolibrary.org/obo/PATO_0001323"
+            ],
+            "source": {
+              "fileObject": {
+                "@id": "labels.csv"
+              },
+              "extract": {
+                "column": "cover"
+              },
+              "format": "0.00"
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "labels/observed",
+            "name": "observed",
+            "dataType": "sc:Date",
+            "source": {
+              "fileObject": {
+                "@id": "labels.csv"
+              },
+              "extract": {
+                "column": "date"
+              },
+              "format": "yyyy-MM-dd"
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "labels/annotators",
+            "name": "annotators",
+            "description": "Annotator ids, separated by '|'.",
+            "dataType": "sc:Text",
+            "isArray": true,
+            "arrayShape": "-1",
+            "source": {
+              "fileObject": {
+                "@id": "labels.csv"
+              },
+              "extract": {
+                "column": "annotators"
+              },
+              "transform": {
+                "separator": "|"
+              }
+            }
+          },
+          {
+            "@type": "cr:Field",
+            "@id": "labels/centroid",
+            "name": "centroid",
+            "description": "Chip centre.",
+            "subField": [
+              {
+                "@type": "cr:Field",
+                "@id": "labels/centroid/lat",
+                "name": "lat",
+                "dataType": "cr:Float64",
+                "source": {
+                  "fileObject": {
+                    "@id": "labels.csv"
+                  },
+                  "extract": {
+                    "column": "lat"
+                  }
+                }
+              },
+              {
+                "@type": "cr:Field",
+                "@id": "labels/centroid/lon",
+                "name": "lon",
+                "dataType": "cr:Float64",
+                "source": {
+                  "fileObject": {
+                    "@id": "labels.csv"
+                  },
+                  "extract": {
+                    "column": "lon"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "sources": {
+    "conformsTo": "auto",
+    "name": "croissant",
+    "alternateName": "croissant",
+    "description": "croissant",
+    "license": "croissant",
+    "url": "croissant",
+    "identifier": "croissant",
+    "creator": "croissant",
+    "publisher": "croissant",
+    "datePublished": "croissant",
+    "dateCreated": "croissant",
+    "dateModified": "croissant",
+    "version": "croissant",
+    "citeAs": "croissant",
+    "keywords": "croissant",
+    "inLanguage": "croissant",
+    "sameAs": "croissant",
+    "isLiveDataset": "croissant",
+    "sdVersion": "croissant",
+    "sdLicense": "croissant",
+    "temporalCoverage": "croissant",
+    "spatialCoverage": "croissant",
+    "geocr:coordinateReferenceSystem": "croissant",
+    "geocr:spatialResolution": "croissant",
+    "geocr:temporalResolution": "croissant",
+    "geocr:samplingStrategy": "croissant",
+    "geocr:spatialBias": "croissant",
+    "geocr:recordEndpoint": "croissant",
+    "geocr:bandConfiguration": "croissant",
+    "rai:dataCollection": "croissant",
+    "rai:dataCollectionType": "croissant",
+    "rai:dataCollectionMissingData": "croissant",
+    "rai:dataCollectionTimeframe": "croissant",
+    "rai:dataPreprocessingProtocol": "croissant",
+    "rai:dataAnnotationProtocol": "croissant",
+    "rai:dataAnnotationPlatform": "croissant",
+    "rai:dataReleaseMaintenancePlan": "croissant",
+    "rai:personalSensitiveInformation": "croissant",
+    "rai:dataBiases": "croissant",
+    "rai:dataLimitations": "croissant",
+    "rai:dataUseCases": "croissant",
+    "rai:annotationsPerItem": "croissant",
+    "prov:wasGeneratedBy": "croissant",
+    "prov:wasDerivedFrom": "croissant",
+    "distribution": "croissant",
+    "recordSet": "croissant"
+  },
+  "valid": true,
+  "mlcroissant": "complete",
+  "roundtrip": true
+}

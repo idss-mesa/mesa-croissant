@@ -1,0 +1,30 @@
+{
+  "about": "One column schema and the record set both MESA writers build from it: mesa_croissant_from_schema (record_set_id t, source_id t.parquet) and the MESA Portal DuckDB viewer's dvCroissantFromFile for t.parquet. Leaves are plain values. The rows load with mlcroissant. Copied byte-identical to the portal's tests/fixtures/croissant/.",
+  "columns": [
+    {"column_name": "id", "column_type": "INTEGER"},
+    {"column_name": "s", "column_type": "STRUCT(a INTEGER, \"geo id\" VARCHAR, n STRUCT(b INTEGER))"},
+    {"column_name": "l", "column_type": "STRUCT(a INTEGER, \"it's\" DOUBLE)[]"},
+    {"column_name": "tags", "column_type": "VARCHAR[]"}
+  ],
+  "record_set": {
+    "id": "t",
+    "field": [
+      {"name": "id", "dataType": ["cr:Int32"], "source": "t.parquet", "column": "id"},
+      {"name": "s", "source": "t.parquet", "column": "s", "subField": [
+        {"name": "a", "dataType": ["cr:Int32"], "transformJsonPath": "a"},
+        {"name": "geo id", "id": "t/s/geo_id", "dataType": ["sc:Text"], "transformJsonPath": "$['geo id']"},
+        {"name": "n", "dataType": ["sc:Text"]}
+      ]},
+      {"name": "l", "source": "t.parquet", "column": "l", "isArray": "true", "arrayShape": "-1", "subField": [
+        {"name": "a", "dataType": ["cr:Int32"], "transformJsonPath": "a"},
+        {"name": "it's", "dataType": ["cr:Float64"], "transformJsonPath": "$['it\\'s']"}
+      ]},
+      {"name": "tags", "dataType": ["sc:Text"], "source": "t.parquet", "column": "tags", "isArray": "true", "arrayShape": "-1"}
+    ]
+  },
+  "warning_paths": ["croissant.recordSet.1.field.2.subField.3"],
+  "rows": [
+    {"id": 1, "s": {"a": 1, "geo id": "x", "n": {"b": 2}}, "l": [{"a": 1, "it's": 1.5}, {"a": 2, "it's": 2.5}], "tags": ["x", "y"]},
+    {"id": 2, "s": {"a": 3, "geo id": "y", "n": {"b": 4}}, "l": [], "tags": []}
+  ]
+}
