@@ -28,7 +28,8 @@ Public API (see ``docs/DESIGN.md``)::
     from_jsonld(doc, *, content_base=None, item=None) -> {"avus", "warnings", "errors"}
     validate(doc) -> {"valid", "errors", "warnings", "conformsTo", "summary"}
     encoding_format_for(name) -> str | None
-    duckdb_type_to_croissant(type_name) -> {"dataType", "isArray", "arrayShape"[, "subFields"]}
+    duckdb_type_to_croissant(type_name) -> {"dataType", "dataTypes", "isArray", "arrayShape"
+                                            [, "subFields"]}
     suggest_distribution(entries, *, lake=None, tables=None) -> [model entries]
     key_catalog(level="all") -> [{"attribute", "cardinality", "required", "level", ...}]
 
@@ -74,7 +75,7 @@ __all__ = [
 ]
 
 CONVENTION_VERSION: int = 1
-CORE_VERSION: str = "1.3.0"
+CORE_VERSION: str = "1.3.1"
 PREFIX = "croissant."
 
 CONFORMS_CORE = "http://mlcommons.org/croissant/1.1"
@@ -300,6 +301,18 @@ _CR_TYPES = {
     "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
     "Float16", "Float32", "Float64", "BoundingBox", "Label", "Split", "SegmentationMask",
 }
+# The data types mlcroissant 1.1.1 can read a field's values as (its EXPECTED_DATA_TYPES
+# plus the ImageObject / AudioObject / VideoObject / BoundingBox semantic types). It reads a
+# field with the first of its dataTypes in this set; a field with none of them (only
+# sc:GeoShape, sc:Number, cr:Label, ...) fails its metadata check unless its source is
+# another field. The others are valid Croissant: give them next to a loadable one, e.g.
+# ["sc:GeoShape", "sc:Text"] (convention section 6).
+_MLC_LOADABLE = frozenset({
+    "sc:Boolean", "sc:Date", "sc:DateTime", "sc:Float", "sc:Integer", "sc:Text", "sc:Time",
+    "sc:URL", "sc:ImageObject", "sc:AudioObject", "sc:VideoObject", "cr:BoundingBox",
+    "cr:Float16", "cr:Float32", "cr:Float64", "cr:Int8", "cr:Int16", "cr:Int32", "cr:Int64",
+    "cr:UInt8", "cr:UInt16", "cr:UInt32", "cr:UInt64",
+})
 
 _URL_RE = re.compile(r"^https?://[^\s/$.?#][^\s]*$", re.IGNORECASE)
 _CURIE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.+-]*:[^\s/][^\s]*$")
@@ -816,7 +829,10 @@ _SUB_DESCRIPTIONS = {
     },
     "field": {
         "name": "field name", "id": "defaults to <recordSet id>/<name>",
-        "description": "description", "dataType": "sc:Text, sc:Integer, cr:Int32, ... or a CURIE",
+        "description": "description",
+        "dataType": "sc:Text, sc:Integer, cr:Int32, ... or a CURIE; give a semantic type "
+                    "mlcroissant cannot read (sc:GeoShape, cr:Label, ...) next to one it reads "
+                    "(dataType.1 sc:GeoShape, dataType.2 sc:Text)",
         "source": "id of a FileObject, FileSet or record set", "column": "extract.column",
         "jsonPath": "extract.jsonPath", "fileProperty": "extract.fileProperty",
         "regex": "transform.regex", "separator": "transform.separator",
@@ -2794,6 +2810,13 @@ def _validate_field(v: _Validator, field: Any, rs_id: str, path: str, rs_has_dat
         if nd.startswith(("sc:", "cr:")) or ":" not in nd:
             p = f"{path}.dataType" + (f"[{i}]" if len(dts) > 1 else "")
             v.warn(p, f"{d!r} is not a known Croissant/schema.org data type")
+    if dts and not subs and not from_field and \
+            not any(_norm_datatype(d) in _MLC_LOADABLE for d in dts):
+        label = fid or name
+        v.warn(path + ".dataType",
+               f"field {label!r}: mlcroissant 1.1.1 cannot read values typed "
+               f"{', '.join(_norm_datatype(d) for d in dts)}; add a type it reads next to it "
+               "(e.g. sc:Text, sc:Float, cr:Int64), as in [\"sc:GeoShape\", \"sc:Text\"]")
     has_src = not (_missing(src) and "value" not in nf)
     if not has_src:
         if rs_has_data or subs:
@@ -3203,7 +3226,12 @@ def encoding_format_for(name: str) -> str | None:
     return _ENCODINGS.get(ext)
 
 
-_DUCK_INT = {
+# The DuckDB type map (convention section 9). A value is the dataType, or a list of
+# dataTypes: a semantic type mlcroissant 1.1.1 cannot read, then the type it reads the
+# stored values as. GEOMETRY (core and spatial) is stored in Parquet as WKB bytes, which
+# mlcroissant reads as sc:Text (bytes). Plain JSON values: the portal's DuckDB viewer keeps
+# a copy (DV_CR_DUCK_TYPES) that its tests compare.
+_DUCK_INT: dict[str, str | list[str]] = {
     "TINYINT": "cr:Int8", "INT1": "cr:Int8",
     "SMALLINT": "cr:Int16", "INT2": "cr:Int16", "SHORT": "cr:Int16",
     "INTEGER": "cr:Int32", "INT": "cr:Int32", "INT4": "cr:Int32", "SIGNED": "cr:Int32",
@@ -3219,9 +3247,20 @@ _DUCK_INT = {
     "DATETIME": "sc:DateTime",
     "HUGEINT": "sc:Float", "UHUGEINT": "sc:Float", "INT128": "sc:Float",
     "UINT128": "sc:Float",
-    "GEOMETRY": "sc:GeoShape", "POINT_2D": "sc:GeoShape", "LINESTRING_2D": "sc:GeoShape",
-    "POLYGON_2D": "sc:GeoShape", "BOX_2D": "sc:GeoShape",
+    "GEOMETRY": ["sc:GeoShape", "sc:Text"], "WKB_BLOB": ["sc:GeoShape", "sc:Text"],
+    "POINT_2D": ["sc:GeoCoordinates"], "BOX_2D": ["sc:GeoShape"],
+    "LINESTRING_2D": ["sc:GeoShape"], "POLYGON_2D": ["sc:GeoShape"],
 }
+# The spatial extension's typed geometries are STRUCTs (and lists of them) in Parquet: the
+# field gets the semantic type of _DUCK_INT and the members of this layout as subFields.
+_DUCK_LAYOUT = {
+    "POINT_2D": "STRUCT(x DOUBLE, y DOUBLE)",
+    "BOX_2D": "STRUCT(min_x DOUBLE, min_y DOUBLE, max_x DOUBLE, max_y DOUBLE)",
+    "LINESTRING_2D": "STRUCT(x DOUBLE, y DOUBLE)[]",
+    "POLYGON_2D": "STRUCT(x DOUBLE, y DOUBLE)[][]",
+}
+# A MAP is a list of entries; mlcroissant (pandas) reads an entry as a (key, value) pair.
+_MAP_MEMBERS = {"key": "$[0]", "value": "$[1]"}
 _ARROW = {
     "int8": "cr:Int8", "int16": "cr:Int16", "int32": "cr:Int32", "int64": "cr:Int64",
     "uint8": "cr:UInt8", "uint16": "cr:UInt16", "uint32": "cr:UInt32", "uint64": "cr:UInt64",
@@ -3278,14 +3317,28 @@ def _unwrap(text: str, opener: str) -> str | None:
     return m.group(2).strip() if m else None
 
 
+def _typed(data_types: list[str], shape: list[str]) -> dict[str, Any]:
+    loadable = next((d for d in data_types if d in _MLC_LOADABLE), None)
+    return {"dataType": loadable, "dataTypes": data_types, "isArray": bool(shape),
+            "arrayShape": ",".join(shape) if shape else None}
+
+
 def duckdb_type_to_croissant(type_name: str) -> dict[str, Any]:
     """Croissant field typing for a DuckDB (or Arrow) column type (convention section 9).
 
-    Returns ``{"dataType": str | None, "isArray": bool, "arrayShape": str | None}``.
-    ``T[]`` / ``LIST(T)`` give ``isArray`` with shape ``-1``, ``T[n]`` gives ``n``
-    (nested arrays give e.g. ``-1,3``). A ``STRUCT(...)`` gives ``dataType: None`` and a
-    ``"subFields"`` list of ``{"name", "dataType", "isArray", "arrayShape"[, "subFields"]}``.
-    Unknown types map to ``sc:Text``.
+    Returns ``{"dataType": str | None, "dataTypes": [str], "isArray": bool,
+    "arrayShape": str | None}``. ``dataTypes`` is what writers store (``dataType.K``):
+    usually one type; GEOMETRY gives ``["sc:GeoShape", "sc:Text"]`` (WKB bytes, which
+    mlcroissant 1.1.1 reads as text). ``dataType`` is the one of them mlcroissant reads,
+    or None. ``T[]`` / ``LIST(T)`` give ``isArray`` with shape ``-1``, ``T[n]`` gives
+    ``n`` (nested arrays give e.g. ``-1,3``). A ``STRUCT(...)`` gives ``dataType: None``,
+    ``dataTypes: []`` and a ``"subFields"`` list of ``{"name", "dataType", "dataTypes",
+    "isArray", "arrayShape"[, "subFields"]}``. A ``MAP(K, V)`` is an array (one more
+    ``-1``) of entries with the subFields ``key`` and ``value``, each with
+    ``"transformJsonPath"`` ``$[0]`` / ``$[1]``. The spatial types POINT_2D, BOX_2D,
+    LINESTRING_2D and POLYGON_2D give their Parquet STRUCT layout as subFields, with
+    ``dataTypes`` ``["sc:GeoCoordinates"]`` / ``["sc:GeoShape"]``. Unknown types map to
+    ``sc:Text``.
     """
     t = (type_name or "").strip()
     shape: list[str] = []
@@ -3313,33 +3366,49 @@ def duckdb_type_to_croissant(type_name: str) -> dict[str, Any]:
         out["isArray"] = True
         out["arrayShape"] = ",".join(shape)
         return out
-    result: dict[str, Any] = {"dataType": "sc:Text", "isArray": bool(shape),
-                              "arrayShape": ",".join(shape) if shape else None}
     struct = _unwrap(t, "STRUCT")
     if struct is not None:
-        subs = []
-        for member in _split_top(struct):
-            name, mtype = _strip_member_name(member)
-            subs.append({"name": name, **duckdb_type_to_croissant(mtype)})
-        result["dataType"] = None
-        result["subFields"] = subs
+        result = _typed([], shape)
+        result["subFields"] = [
+            {"name": name, **duckdb_type_to_croissant(mtype)}
+            for name, mtype in map(_strip_member_name, _split_top(struct))
+        ]
         return result
+    entry = _unwrap(t, "MAP")
+    if entry is not None:
+        parts = _split_top(entry)
+        if len(parts) == 2:
+            result = _typed([], [*shape, "-1"])
+            result["subFields"] = [
+                {"name": name, **duckdb_type_to_croissant(mtype), "transformJsonPath": jp}
+                for (name, jp), mtype in zip(_MAP_MEMBERS.items(), parts, strict=True)
+            ]
+            return result
     if t in _ARROW:
-        result["dataType"] = _ARROW[t]
-        return result
+        return _typed([_ARROW[t]], shape)
     upper = re.sub(r"\s+", " ", t.upper())
     base = re.sub(r"\s*[(\[].*$", "", upper).strip()
     if base in _DUCK_INT:
-        result["dataType"] = _DUCK_INT[base]
-    elif base.startswith(("DECIMAL", "NUMERIC")):
-        result["dataType"] = "sc:Float"
-    elif base.startswith("TIMESTAMP"):
-        result["dataType"] = "sc:DateTime"
-    elif base.startswith("DATE"):
-        result["dataType"] = "sc:Date"
-    elif base.startswith("TIME"):
-        result["dataType"] = "sc:Time"
-    return result
+        mapped = _DUCK_INT[base]
+        types = [mapped] if isinstance(mapped, str) else list(mapped)
+        if base in _DUCK_LAYOUT:
+            layout = duckdb_type_to_croissant(_DUCK_LAYOUT[base])
+            if layout["arrayShape"]:
+                shape += layout["arrayShape"].split(",")
+            result = _typed(types, shape)
+            result["dataType"] = None
+            result["subFields"] = layout["subFields"]
+            return result
+        return _typed(types, shape)
+    if base.startswith(("DECIMAL", "NUMERIC")):
+        return _typed(["sc:Float"], shape)
+    if base.startswith("TIMESTAMP"):
+        return _typed(["sc:DateTime"], shape)
+    if base.startswith("DATE"):
+        return _typed(["sc:Date"], shape)
+    if base.startswith("TIME"):
+        return _typed(["sc:Time"], shape)
+    return _typed(["sc:Text"], shape)
 
 
 # ---------------------------------------------------------------------------
@@ -3360,6 +3429,17 @@ def _unique(ident: str, used: set[str]) -> str:
         n += 1
     used.add(out)
     return out
+
+
+def _includes_any_depth(folder: str, pattern: str) -> list[dict[str, str]]:
+    """FileSet includes for files matching ``pattern`` directly in ``folder`` or below it.
+
+    Two globs: ``<folder>/<pattern>`` and ``<folder>/**/<pattern>``. mlcroissant 1.1.1
+    matches with ``fnmatch``, where ``**/`` needs at least one more folder, so the second
+    alone misses an unpartitioned DuckLake table (its files sit directly in the table
+    folder). A file matching both is read once.
+    """
+    return [_leaf(f"{folder}/{pattern}"), _leaf(f"{folder}/**/{pattern}")]
 
 
 def _table_names(tables: Any) -> list[tuple[str, str]]:
@@ -3390,10 +3470,12 @@ def suggest_distribution(entries: Iterable[Mapping[str, Any]], *,
 
     With a lake: a FileObject for the catalog (``@id`` = its file name,
     ``application/x-ducklake``) and a
-    FileSet ``ducklake-<table>`` per table (``<data>/<schema>/<table>/**/*.parquet``), or
-    one ``ducklake-data`` FileSet when no table names are known. Other files: one
-    FileSet per encoding format for more than 5 files of the same format under
-    ``data/``, otherwise one FileObject per file. Hidden files and ``.mesa/`` are skipped.
+    FileSet ``ducklake-<table>`` per table (includes ``<data>/<schema>/<table>/*.parquet``
+    and ``<data>/<schema>/<table>/**/*.parquet``, for unpartitioned and partitioned
+    tables), or one ``ducklake-data`` FileSet (``<data>/**/*.parquet``) when no table names
+    are known. Other files: one FileSet per encoding format for more than 5 files of the
+    same format under ``data/`` (``data/*.<ext>`` and ``data/**/*.<ext>``), otherwise one
+    FileObject per file. Hidden files and ``.mesa/`` are skipped.
     Entries are model-shaped (leaves ``{"value", "unit"}``), ready for
     :func:`model_to_avus` under ``distribution``.
     """
@@ -3448,7 +3530,8 @@ def suggest_distribution(entries: Iterable[Mapping[str, Any]], *,
                     "type": _leaf("FileSet"),
                     "description": _leaf(f"Parquet files of DuckLake table {schema}.{name}"),
                     "encodingFormat": _leaf("application/x-parquet"),
-                    "includes": [_leaf(f"{data_path}/{schema}/{name}/**/*.parquet")],
+                    "includes": _includes_any_depth(f"{data_path}/{schema}/{name}",
+                                                    "*.parquet"),
                 })
         else:
             out.append({
@@ -3483,7 +3566,7 @@ def suggest_distribution(entries: Iterable[Mapping[str, Any]], *,
             "type": _leaf("FileSet"),
             "description": _leaf(f"{len(members)} {exts[0]} files under data/"),
             "encodingFormat": _leaf(fmt),
-            "includes": [_leaf(f"data/**/*.{ext}") for ext in exts],
+            "includes": [inc for ext in exts for inc in _includes_any_depth("data", f"*.{ext}")],
         })
         fileset_paths.update(m["path"] for m in members)
     for f in sorted(folders, key=lambda r: r["path"]):

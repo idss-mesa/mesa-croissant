@@ -205,13 +205,27 @@ Known mlcroissant 1.1.1 differences (see `tests/test_mlcroissant_compat.py`):
   the transform the member reads as null). `tests/fixtures/schema_parity.json` holds one
   schema and the record set both writers build from it; `test_mlcroissant_compat.py` loads
   its records.
+- **Data types.** mlcroissant reads a field only with one of the types it knows (`sc:Text`,
+  `sc:Float`, `cr:Int64`, `sc:DateTime`, ..., see convention section 6). `sc:GeoShape`,
+  `sc:GeoCoordinates`, `sc:Number`, `sc:Enumeration`, `cr:Label`, `cr:Split` and
+  `cr:SegmentationMask` alone fail its check; give them next to a readable type, as the type
+  map does for GEOMETRY (`["sc:GeoShape", "sc:Text"]`, the WKB bytes). `core.validate` warns
+  about a field with no readable type.
+- **MAP columns.** A Parquet MAP reads as a list of (key, value) pairs. The type map writes
+  an `isArray` field with the subFields `key` and `value` read with `$[0]` and `$[1]`;
+  typed `sc:Text`, it fails the whole record set. JSON and TIMESTAMPTZ columns load as
+  `sc:Text` and `sc:DateTime` (checked with real NEON DuckLake Parquet).
+- **FileSet globs.** mlcroissant matches `includes` with `fnmatch`, where `**/` needs at
+  least one more folder: `<table>/**/*.parquet` alone finds no file of an unpartitioned
+  DuckLake table. `suggest_distribution` writes `<table>/*.parquet` and
+  `<table>/**/*.parquet`; a file matching both is read once.
 - **schema.org.** Documents use `https://schema.org/`, as every upstream example does.
   mlcroissant 1.1.1 does not find the Dataset in a document that uses `http://`. Import
   accepts both.
 - **Warnings.** mlcroissant warns about a missing `citeAs` and `version`, and about context
   terms it adds itself (`path`, `repeated`, `replace`, `samplingRate`).
 
-Running the compatibility tests: `pip install mlcroissant pytest` and then `pytest
+Running the compatibility tests: `pip install "mlcroissant[parquet]" pytest` and then `pytest
 tests/test_mlcroissant_compat.py`. They skip themselves when mlcroissant is absent.
 
 ## The Croissant ecosystem

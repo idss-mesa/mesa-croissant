@@ -1107,21 +1107,25 @@ def _field_model(name: str, typed: dict[str, Any], *, source: str | None, column
     STRUCT column. A member that is itself a STRUCT is typed ``sc:Text`` and gets no
     transform (convention section 9, STRUCT row; the portal DuckDB viewer writes the same):
     with it mlcroissant 1.1 fails the whole record set casting the object to text, without
-    it the member reads as null and core only warns.
+    it the member reads as null and core only warns. A MAP entry's ``key`` / ``value`` read
+    ``$[0]`` / ``$[1]`` (``typed["transformJsonPath"]``), and every type of ``dataTypes``
+    is written (GEOMETRY: ``sc:GeoShape`` and ``sc:Text``).
     """
     f: dict[str, Any] = {"name": name}
     fid = f"{parent_id}/{name}"
     if _WS_RE.search(name):
         f["id"] = _safe_id(fid)
-    if typed.get("dataType"):
-        f["dataType"] = [typed["dataType"]]
+    types = typed.get("dataTypes") or ([typed["dataType"]] if typed.get("dataType") else [])
+    if types:
+        f["dataType"] = list(types)
     if source:
         f["source"] = source
     if column:
         f["column"] = column
     subs = typed.get("subFields")
     if depth >= 1 and subs is None:
-        f["transformJsonPath"] = _member_json_path(name)
+        # A MAP entry's key / value come with their positional path ($[0] / $[1]).
+        f["transformJsonPath"] = typed.get("transformJsonPath") or _member_json_path(name)
     if typed.get("isArray"):
         f["isArray"] = "true"
         if typed.get("arrayShape"):
@@ -1134,6 +1138,10 @@ def _field_model(name: str, typed: dict[str, Any], *, source: str | None, column
             f["dataType"] = ["sc:Text"]
             warnings.append(_msg(path, "nested STRUCT below the first level is typed sc:Text"))
         else:
+            if "," in (typed.get("arrayShape") or ""):
+                warnings.append(_msg(path, "mlcroissant 1.1.1 cannot read subFields under a "
+                                           f"list of lists (arrayShape {typed['arrayShape']}): "
+                                           "loading this record set fails"))
             f["subField"] = [
                 _field_model(str(s["name"]), s, source=None, column=None,
                              parent_id=f.get("id", fid), path=f"{path}.subField.{k}",
@@ -1149,7 +1157,9 @@ def _field_model(name: str, typed: dict[str, Any], *, source: str | None, column
     "schema: one field per column with source, column and dataType from the DuckDB type map "
     "(lists become isArray, STRUCTs become subFields read with transformJsonPath = the "
     "member name, quoted as $['...'] unless a plain identifier; a STRUCT member that is "
-    "itself a STRUCT is typed sc:Text without a transform). Writes nothing; pass the AVUs "
+    "itself a STRUCT is typed sc:Text without a transform; a MAP becomes an isArray field "
+    "with subFields key and value read with $[0] / $[1]; GEOMETRY (WKB) is typed "
+    "[sc:GeoShape, sc:Text]). Writes nothing; pass the AVUs "
     "to mesa_croissant_apply.",
     input_model=FromSchemaInput,
     output_model=FromSchemaOutput,

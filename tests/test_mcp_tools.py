@@ -1062,6 +1062,37 @@ def test_from_schema_avus_generate_a_valid_document() -> None:
                              "transform": {"jsonPath": "lat"}}
 
 
+def test_from_schema_map_geometry_and_spatial_columns() -> None:
+    """MAP: an isArray field with subFields key / value read with $[0] / $[1] (what
+    mlcroissant 1.1.1 loads from Parquet). GEOMETRY: [sc:GeoShape, sc:Text]. POINT_2D: its
+    STRUCT layout under sc:GeoCoordinates. POLYGON_2D (a list of lists of STRUCTs, which
+    mlcroissant does not load) gets a warning. The document has no readability warning."""
+    res = run(mt.handle_from_schema(mt.FromSchemaInput(
+        columns=[{"name": "props", "type": "MAP(VARCHAR, VARCHAR)"},
+                 {"name": "geometry", "type": "GEOMETRY"},
+                 {"name": "pt", "type": "POINT_2D"},
+                 {"name": "poly", "type": "POLYGON_2D"}],
+        record_set_id="plots", source_id="ratings-csv")))
+    got = {a["attribute"]: a["value"] for a in res["avus"]}
+    f = "croissant.recordSet.1.field."
+    assert got[f + "1.isArray"] == "true" and got[f + "1.arrayShape"] == "-1"
+    assert f + "1.dataType" not in got
+    assert [(got[f"{f}1.subField.{k}.name"], got[f"{f}1.subField.{k}.transformJsonPath"])
+            for k in (1, 2)] == [("key", "$[0]"), ("value", "$[1]")]
+    assert (got[f + "2.dataType.1"], got[f + "2.dataType.2"]) == ("sc:GeoShape", "sc:Text")
+    assert got[f + "3.dataType"] == "sc:GeoCoordinates"
+    assert [got[f"{f}3.subField.{k}.transformJsonPath"] for k in (1, 2)] == ["x", "y"]
+    assert [w["path"] for w in res["warnings"]] == [f + "4"]
+    assert "list of lists" in res["warnings"][0]["message"]
+    base = [a for a in GOLDEN["avus"] if not a["attribute"].startswith("croissant.recordSet.")]
+    out = core.to_jsonld(base + res["avus"], item=GOLDEN["item"])
+    assert out["validation"]["valid"] is True, out["validation"]["errors"]
+    assert not any("mlcroissant 1.1.1" in w["message"] for w in out["validation"]["warnings"])
+    fields = out["document"]["recordSet"][0]["field"]
+    assert fields[1]["dataType"] == ["sc:GeoShape", "sc:Text"]
+    assert fields[0]["subField"][1]["source"]["transform"] == {"jsonPath": "$[1]"}
+
+
 def test_from_schema_index_and_input_checks() -> None:
     res = run(mt.handle_from_schema(mt.FromSchemaInput(
         columns=[{"name": "a", "type": "BOOLEAN"}], record_set_id="t2", source_id="s",

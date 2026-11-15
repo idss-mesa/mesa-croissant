@@ -86,7 +86,7 @@ def gen(avus, item=None):
 class TestModule:
     def test_versions_and_uris(self):
         assert core.CONVENTION_VERSION == 1
-        assert core.CORE_VERSION == "1.3.0"
+        assert core.CORE_VERSION == "1.3.1"
         assert core.PREFIX == "croissant."
         assert CONFORMS_CORE == "http://mlcommons.org/croissant/1.1"
         assert CONFORMS_RAI == "http://mlcommons.org/croissant/RAI/1.0"
@@ -1727,6 +1727,87 @@ class TestValidate:
         flagged = [p for p, _ in messages(r["warnings"]) if "dataType" in p]
         assert flagged == ["recordSet[0].field[0].dataType[4]", "recordSet[0].field[0].dataType[5]"]
 
+    @pytest.mark.parametrize(
+        "data_type",
+        [
+            "sc:GeoShape",
+            "sc:GeoCoordinates",
+            "sc:Number",
+            "sc:Enumeration",
+            "cr:Label",
+            "cr:Split",
+            "cr:SegmentationMask",
+            "GeoShape",
+            "https://schema.org/GeoShape",
+            "ex:Custom",
+            ["sc:GeoShape", "cr:Label"],
+        ],
+    )
+    def test_datatype_mlcroissant_cannot_read_is_a_warning(self, data_type):
+        """Valid Croissant types that mlcroissant 1.1.1 cannot read a field's values as:
+        a warning naming the field, not an error."""
+        doc = valid_doc()
+        doc["recordSet"][0]["field"][0]["dataType"] = data_type
+        r = validate(doc)
+        assert r["valid"]
+        hits = [
+            m
+            for m in r["warnings"]
+            if m["path"] == "recordSet[0].field[0].dataType" and "mlcroissant 1.1.1" in m["message"]
+        ]
+        assert len(hits) == 1 and "'rs/x'" in hits[0]["message"]
+
+    @pytest.mark.parametrize(
+        "data_type",
+        [
+            ["sc:GeoShape", "sc:Text"],
+            ["sc:Text", "sc:GeoShape"],
+            ["cr:Label", "cr:Int64"],
+            "sc:ImageObject",
+            "cr:BoundingBox",
+            "Text",
+            "http://mlcommons.org/croissant/Float32",
+        ],
+    )
+    def test_datatype_with_a_readable_member_has_no_warning(self, data_type):
+        doc = valid_doc()
+        doc["recordSet"][0]["field"][0]["dataType"] = data_type
+        r = validate(doc)
+        assert r["valid"]
+        assert not any("mlcroissant 1.1.1" in m["message"] for m in r["warnings"])
+
+    def test_datatype_readability_skips_subfields_and_source_fields(self):
+        """A field with subFields is read through them, and a field whose source is another
+        field takes that field's type (mlcroissant does the same)."""
+        doc = valid_doc()
+        f = doc["recordSet"][0]["field"][0]
+        f["dataType"] = "sc:GeoCoordinates"
+        f["subField"] = [
+            {
+                "@type": "cr:Field",
+                "@id": "rs/x/lat",
+                "dataType": "sc:Float",
+                "source": {"fileObject": {"@id": "f"}, "extract": {"column": "lat"}},
+            }
+        ]
+        doc["recordSet"].append(
+            {
+                "@type": "cr:RecordSet",
+                "@id": "j",
+                "field": [
+                    {
+                        "@type": "cr:Field",
+                        "@id": "j/x",
+                        "dataType": "cr:Label",
+                        "source": {"field": {"@id": "rs/x/lat"}},
+                    }
+                ],
+            }
+        )
+        r = validate(doc)
+        assert r["valid"], r["errors"]
+        assert not any("mlcroissant 1.1.1" in m["message"] for m in r["warnings"])
+
     def test_arrays(self):
         doc = valid_doc()
         f = doc["recordSet"][0]["field"][0]
@@ -2379,9 +2460,10 @@ def test_encoding_format_for(name, fmt):
     assert encoding_format_for(name) == fmt
 
 
-def dt(t, shape=None, is_array=None):
+def dt(t, shape=None, is_array=None, types=None):
     return {
         "dataType": t,
+        "dataTypes": types if types is not None else ([t] if t else []),
         "isArray": bool(shape) if is_array is None else is_array,
         "arrayShape": shape,
     }
@@ -2432,9 +2514,12 @@ def dt(t, shape=None, is_array=None):
         ("BLOB", dt("sc:Text")),
         ("JSON", dt("sc:Text")),
         ("ENUM('a', 'b')", dt("sc:Text")),
-        ("MAP(VARCHAR, INTEGER)", dt("sc:Text")),
         ("string", dt("sc:Text")),
-        ("GEOMETRY", dt("sc:GeoShape")),
+        ("GEOMETRY", dt("sc:Text", types=["sc:GeoShape", "sc:Text"])),
+        ("geometry", dt("sc:Text", types=["sc:GeoShape", "sc:Text"])),
+        ("WKB_BLOB", dt("sc:Text", types=["sc:GeoShape", "sc:Text"])),
+        ("GEOMETRY[]", dt("sc:Text", "-1", types=["sc:GeoShape", "sc:Text"])),
+        ("MAP(VARCHAR)", dt("sc:Text")),
         ("", dt("sc:Text")),
         (None, dt("sc:Text")),
         ("INTEGER[]", dt("cr:Int32", "-1")),
@@ -2463,6 +2548,7 @@ def test_duckdb_struct():
     assert out["subFields"][2] == {
         "name": "tags",
         "dataType": "sc:Text",
+        "dataTypes": ["sc:Text"],
         "isArray": True,
         "arrayShape": "-1",
     }
@@ -2476,6 +2562,104 @@ def test_duckdb_struct():
     assert (
         lst["isArray"] is True and lst["arrayShape"] == "-1" and lst["subFields"][0]["name"] == "a"
     )
+
+
+def test_duckdb_types_mlcroissant_reads():
+    """Every type the map gives has a dataType mlcroissant 1.1.1 reads (convention
+    section 9), or subFields that have one."""
+    from mesa_croissant.core import _DUCK_INT, _MLC_LOADABLE
+
+    def check(typed, where):
+        if "subFields" in typed:
+            assert typed["dataType"] is None, where
+            for sub in typed["subFields"]:
+                check(sub, f"{where}.{sub['name']}")
+        else:
+            assert typed["dataType"] in _MLC_LOADABLE, where
+            assert typed["dataType"] in typed["dataTypes"], where
+
+    for name in [*_DUCK_INT, "VARCHAR", "JSON", "UUID", "MAP(VARCHAR, JSON)", "DECIMAL(9,2)"]:
+        check(duckdb_type_to_croissant(name), name)
+
+
+def test_duckdb_map():
+    """A MAP is a list of (key, value) entries: mlcroissant (pandas) reads a Parquet MAP
+    entry as a pair, so the members read $[0] and $[1]."""
+    out = duckdb_type_to_croissant("MAP(VARCHAR, INTEGER)")
+    assert out == {
+        "dataType": None,
+        "dataTypes": [],
+        "isArray": True,
+        "arrayShape": "-1",
+        "subFields": [
+            {**dt("sc:Text"), "name": "key", "transformJsonPath": "$[0]"},
+            {**dt("cr:Int32"), "name": "value", "transformJsonPath": "$[1]"},
+        ],
+    }
+    assert duckdb_type_to_croissant("map<string, double>")["subFields"][1]["dataType"] == (
+        "cr:Float64"
+    )
+    nested = duckdb_type_to_croissant("MAP(VARCHAR, VARCHAR[])[]")
+    assert nested["arrayShape"] == "-1,-1"
+    assert nested["subFields"][1]["isArray"] is True
+    # A STRUCT value keeps its members (writers type a STRUCT below the first level sc:Text).
+    struct_value = duckdb_type_to_croissant("MAP(VARCHAR, STRUCT(a INT))")["subFields"][1]
+    assert struct_value["subFields"][0]["name"] == "a"
+
+
+def test_duckdb_spatial_types():
+    """GEOMETRY is WKB bytes in Parquet: [sc:GeoShape, sc:Text] (mlcroissant 1.1.1 reads the
+    second). The spatial extension's typed geometries are STRUCTs in Parquet."""
+    assert duckdb_type_to_croissant("GEOMETRY")["dataTypes"] == ["sc:GeoShape", "sc:Text"]
+    point = duckdb_type_to_croissant("POINT_2D")
+    assert point["dataType"] is None and point["dataTypes"] == ["sc:GeoCoordinates"]
+    assert point["isArray"] is False
+    assert [(s["name"], s["dataType"]) for s in point["subFields"]] == [
+        ("x", "cr:Float64"),
+        ("y", "cr:Float64"),
+    ]
+    box = duckdb_type_to_croissant("BOX_2D")
+    assert box["dataTypes"] == ["sc:GeoShape"]
+    assert [s["name"] for s in box["subFields"]] == ["min_x", "min_y", "max_x", "max_y"]
+    line = duckdb_type_to_croissant("LINESTRING_2D")
+    assert (line["isArray"], line["arrayShape"]) == (True, "-1")
+    assert [s["name"] for s in line["subFields"]] == ["x", "y"]
+    polygon = duckdb_type_to_croissant("POLYGON_2D")
+    assert (polygon["isArray"], polygon["arrayShape"]) == (True, "-1,-1")
+    assert duckdb_type_to_croissant("POINT_2D[]")["arrayShape"] == "-1"
+
+
+def test_type_map_avus_from_1_3_0_still_parse_and_export():
+    """AVUs 1.3.0 wrote for a GEOMETRY column (a bare sc:GeoShape), a MAP column (sc:Text)
+    and a DuckLake FileSet ('<table>/**/*.parquet' only) still parse and export; the
+    export now warns that mlcroissant cannot read the GeoShape-only field."""
+    avus = MINIMAL[:5] + [
+        A("croissant.distribution.1.id", "ducklake-plots"),
+        A("croissant.distribution.1.type", "FileSet"),
+        A("croissant.distribution.1.encodingFormat", "application/x-parquet"),
+        A("croissant.distribution.1.includes.1", "ducklake/data/main/plots/**/*.parquet"),
+        A("croissant.recordSet.1.id", "plots"),
+        A("croissant.recordSet.1.field.1.name", "geometry"),
+        A("croissant.recordSet.1.field.1.dataType", "sc:GeoShape"),
+        A("croissant.recordSet.1.field.1.source", "ducklake-plots"),
+        A("croissant.recordSet.1.field.1.column", "geometry"),
+        A("croissant.recordSet.1.field.2.name", "props"),
+        A("croissant.recordSet.1.field.2.dataType", "sc:Text"),
+        A("croissant.recordSet.1.field.2.source", "ducklake-plots"),
+        A("croissant.recordSet.1.field.2.column", "props"),
+    ]
+    parsed = parse_avus(avus)
+    assert parsed["warnings"] == [] and parsed["unknown"] == []
+    assert triples(model_to_avus(parsed["model"])) == triples(avus)
+    out = gen(avus)
+    assert out["validation"]["valid"], out["validation"]["errors"]
+    doc = out["document"]
+    assert doc["distribution"][0]["includes"] == "ducklake/data/main/plots/**/*.parquet"
+    assert [f["dataType"] for f in doc["recordSet"][0]["field"]] == ["sc:GeoShape", "sc:Text"]
+    assert has_msg(out["validation"]["warnings"], "recordSet[0].field[0].dataType", "mlcroissant")
+    back = from_jsonld(doc)
+    assert back["errors"] == []
+    assert ("croissant.recordSet.1.field.1.dataType", "sc:GeoShape", "") in triples(back["avus"])
 
 
 class TestSuggestDistribution:
@@ -2515,8 +2699,14 @@ class TestSuggestDistribution:
         assert cat["md5"]["value"] == "f" * 32
         assert out[1]["type"]["value"] == "FileSet"
         assert out[1]["encodingFormat"]["value"] == "application/x-parquet"
-        assert [i["value"] for i in out[1]["includes"]] == ["ducklake/data/main/sites/**/*.parquet"]
-        assert out[3]["includes"][0]["value"] == "ducklake/data/raw/met/**/*.parquet"
+        assert [i["value"] for i in out[1]["includes"]] == [
+            "ducklake/data/main/sites/*.parquet",
+            "ducklake/data/main/sites/**/*.parquet",
+        ]
+        assert [i["value"] for i in out[3]["includes"]] == [
+            "ducklake/data/raw/met/*.parquet",
+            "ducklake/data/raw/met/**/*.parquet",
+        ]
         assert out[4]["encodingFormat"]["value"] == "text/markdown"
         avus = model_to_avus({"distribution": out})
         assert avus[0] == A("croissant.distribution.1.id", "neon_catalog.ducklake")
@@ -2563,7 +2753,12 @@ class TestSuggestDistribution:
         assert len(sets) == 1
         assert sets[0]["id"]["value"] == "tif-files"
         assert sets[0]["encodingFormat"]["value"] == "image/tiff"
-        assert [i["value"] for i in sets[0]["includes"]] == ["data/**/*.tif", "data/**/*.tiff"]
+        assert [i["value"] for i in sets[0]["includes"]] == [
+            "data/*.tif",
+            "data/**/*.tif",
+            "data/*.tiff",
+            "data/**/*.tiff",
+        ]
         objects = [e for e in out if e["type"]["value"] == "FileObject"]
         assert len(objects) == 12
         assert objects[0]["id"]["value"] == "data/c0.csv"

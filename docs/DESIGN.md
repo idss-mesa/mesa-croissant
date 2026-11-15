@@ -94,8 +94,11 @@ def validate(doc) -> dict
     #  "warnings": [...], "conformsTo": [...], "summary": {"distribution": n, "recordSet": n, "field": n}}
 def encoding_format_for(name: str) -> str | None   # by extension
 def duckdb_type_to_croissant(type_name: str) -> dict
-    # {"dataType": "cr:Int32", "isArray": False, "arrayShape": None}; a STRUCT gives dataType None
-    # and "subFields": [{"name", "dataType", "isArray", "arrayShape"[, "subFields"]}]
+    # {"dataType": "cr:Int32", "dataTypes": ["cr:Int32"], "isArray": False, "arrayShape": None}
+    # dataTypes is what writers store (GEOMETRY: ["sc:GeoShape", "sc:Text"]); dataType is the one
+    # of them mlcroissant 1.1.1 reads. A STRUCT gives dataType None, dataTypes [] and
+    # "subFields": [{"name", "dataType", "dataTypes", "isArray", "arrayShape"[, "subFields"]}];
+    # a MAP is an isArray field whose subFields key / value carry "transformJsonPath" $[0] / $[1]
 def suggest_distribution(entries, *, lake=None, tables=None) -> list[dict]
     # entries: [{"name", "path" (relative to root), "is_folder", "size", "md5"}]; lake: registry
     # entry or None; tables: the lake's tables ("schema.table" | "table" | {"schema", "table"})

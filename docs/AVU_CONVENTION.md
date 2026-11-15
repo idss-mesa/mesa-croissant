@@ -173,7 +173,7 @@ On the dataset folder: `croissant.distribution.N.<sub>`.
 | `contentSize` | FileObject | number of bytes; unit optional (default `B`) |
 | `sha256` / `md5` | FileObject | hex digests |
 | `containedIn.M` | both | `id`s of the FileObject(s)/FileSet(s) containing this one |
-| `includes.M` / `excludes.M` | FileSet | glob patterns relative to the dataset root (`data/**/*.parquet`) |
+| `includes.M` / `excludes.M` | FileSet | glob patterns relative to the dataset root (`data/*.parquet`, `data/**/*.parquet`). mlcroissant 1.1.1 matches them with Python's `fnmatch`: `*` also matches `/`, and `**/` needs at least one more folder, so `data/**/*.parquet` alone misses `data/x.parquet`. To cover a folder at any depth, give both patterns (a file matching both is read once) |
 
 A relative `contentUrl` is resolved against the dataset root when the document is
 generated: public paths become `https://data.cyverse.org/dav-anon/<path>`, other paths
@@ -220,7 +220,7 @@ is left out (fields default to it). Every other distribution entry is reported a
 | `name` | **required** |
 | `id` | defaults to `<recordSet id>/<name>` |
 | `description` | |
-| `dataType` / `dataType.K` | one or several types: `sc:Text`, `sc:Integer`, `sc:Float`, `sc:Boolean`, `sc:Date`, `sc:DateTime`, `sc:Time`, `sc:URL`, `sc:ImageObject`, `sc:GeoShape`, `sc:GeoCoordinates`, `cr:Int8…cr:Int64`, `cr:UInt8…cr:UInt64`, `cr:Float16/32/64`, `cr:BoundingBox`, `cr:Label`, `cr:Split`, `cr:SegmentationMask`, or any CURIE/IRI. The `sc:`/`cr:` prefix is optional on read |
+| `dataType` / `dataType.K` | one or several types: `sc:Text`, `sc:Integer`, `sc:Float`, `sc:Boolean`, `sc:Date`, `sc:DateTime`, `sc:Time`, `sc:URL`, `sc:ImageObject`, `sc:GeoShape`, `sc:GeoCoordinates`, `cr:Int8…cr:Int64`, `cr:UInt8…cr:UInt64`, `cr:Float16/32/64`, `cr:BoundingBox`, `cr:Label`, `cr:Split`, `cr:SegmentationMask`, or any CURIE/IRI. The `sc:`/`cr:` prefix is optional on read. mlcroissant 1.1.1 reads a field's values with the first of its types it knows: `sc:Boolean`, `sc:Date`, `sc:DateTime`, `sc:Float`, `sc:Integer`, `sc:Text`, `sc:Time`, `sc:URL`, `cr:Int*`, `cr:UInt*`, `cr:Float*`, `sc:ImageObject`, `sc:AudioObject`, `sc:VideoObject`, `cr:BoundingBox`. A semantic type it does not read (`sc:GeoShape`, `sc:GeoCoordinates`, `sc:Number`, `sc:Enumeration`, `cr:Label`, `cr:Split`, `cr:SegmentationMask`, other CURIEs) should be given next to one it reads, e.g. `dataType.1 = sc:GeoShape`, `dataType.2 = sc:Text`; a field with none of them (and no subFields, and no field as its source) gets a validator warning, not an error |
 | `source` | `id` of a distribution entry (FileObject or FileSet) or of another record set. With a record set and a `column` naming one of its fields the source is emitted as that field; a bare record-set source is valid Croissant 1.1 but mlcroissant 1.1 cannot load it (the validator warns) |
 | `column` | `extract.column` (CSV, Parquet) |
 | `jsonPath` | `extract.jsonPath` |
@@ -264,7 +264,11 @@ A folder with `mesa.enabled=true` that is a registered DuckLake (portal
 - a FileObject for the catalog file (`encodingFormat` `application/x-ducklake`, an
   unregistered media type used by MESA, `contentUrl` relative to the root);
 - a FileSet per table `ducklake-<table>` with `encodingFormat` `application/x-parquet` and
-  `includes` `<data path>/<schema>/<table>/**/*.parquet`;
+  `includes` `<data path>/<schema>/<table>/*.parquet` and
+  `<data path>/<schema>/<table>/**/*.parquet` (an unpartitioned table keeps its files
+  directly in the table folder, a partitioned one in `k=v/` folders; see section 5 for why
+  both). FileSets written with only the `**/` pattern (core 1.3.0) stay valid but find no
+  files of an unpartitioned table in mlcroissant 1.1.1;
 - from the portal DuckDB viewer, one RecordSet per table with one Field per column
   (`source` = the table's FileSet, `column` = the column name, `dataType` from the DuckDB type
   map in section 9).
@@ -281,8 +285,10 @@ A folder with `mesa.enabled=true` that is a registered DuckLake (portal
 | DATE | `sc:Date` |
 | TIME, TIMETZ | `sc:Time` |
 | TIMESTAMP*, TIMESTAMPTZ | `sc:DateTime` |
-| VARCHAR, UUID, INTERVAL, BLOB, JSON, ENUM, anything else | `sc:Text` |
-| GEOMETRY (spatial extension) | `sc:GeoShape` |
+| VARCHAR, UUID, INTERVAL, BLOB, JSON, ENUM, anything else | `sc:Text` (JSON is read as its text) |
+| GEOMETRY, WKB_BLOB | `dataType.1 = sc:GeoShape`, `dataType.2 = sc:Text`: Parquet stores the WKB bytes, which mlcroissant 1.1.1 reads as text (bytes); it cannot read `sc:GeoShape` alone |
+| POINT_2D, BOX_2D, LINESTRING_2D, POLYGON_2D (spatial extension) | their Parquet layout, as for STRUCT: POINT_2D is `sc:GeoCoordinates` with subFields `x`, `y` (`cr:Float64`); BOX_2D is `sc:GeoShape` with `min_x`, `min_y`, `max_x`, `max_y`; LINESTRING_2D is `sc:GeoShape`, `isArray`, subFields `x`, `y`; POLYGON_2D the same with `arrayShape` `-1,-1` (mlcroissant 1.1.1 does not read subFields of a list of lists; `mesa_croissant_from_schema` warns) |
+| `MAP(K, V)` | no dataType; `isArray=true` (one more `-1` in `arrayShape`) with the subFields `key` (type of `K`, `transformJsonPath` `$[0]`) and `value` (type of `V`, `transformJsonPath` `$[1]`). mlcroissant (pandas) reads a Parquet MAP as a list of (key, value) pairs; as `sc:Text` it fails the whole record set |
 | `T[]`, `LIST(T)`, `T[n]` | dataType of `T` with `isArray=true` (`arrayShape` `-1` or `n`) |
 | STRUCT(...) | no dataType on the field; one `subField` per member. Writers should give each member `transformJsonPath` = the member's JSONPath: the bare name for a plain identifier, else `$['…']` (section 6, `transformJsonPath`); it then reads the parent's source and column, and mlcroissant loads it. A member that is itself a STRUCT is typed `sc:Text` (one level of nesting) and gets no `transformJsonPath` (with one, mlcroissant 1.1.1 fails the whole record set casting the object to text; without it the member reads as null). A member without it is read from its parent's source and column and the validator warns, without an error |
 

@@ -1,10 +1,12 @@
 {
-  "about": "One column schema and the record set both MESA writers build from it: mesa_croissant_from_schema (record_set_id t, source_id t.parquet) and the MESA Portal DuckDB viewer's dvCroissantFromFile for t.parquet. Leaves are plain values. The rows load with mlcroissant. Copied byte-identical to the portal's tests/fixtures/croissant/.",
+  "about": "One column schema and the record set both MESA writers build from it: mesa_croissant_from_schema (record_set_id t, source_id t.parquet) and the MESA Portal DuckDB viewer's dvCroissantFromFile for t.parquet. Leaves are plain values. The rows load with mlcroissant (a MAP entry as a [key, value] pair, the form pandas gives for a Parquet MAP; GEOMETRY as its WKB in hex). Copied byte-identical to the portal's tests/fixtures/croissant/.",
   "columns": [
     {"column_name": "id", "column_type": "INTEGER"},
     {"column_name": "s", "column_type": "STRUCT(a INTEGER, \"geo id\" VARCHAR, n STRUCT(b INTEGER))"},
     {"column_name": "l", "column_type": "STRUCT(a INTEGER, \"it's\" DOUBLE)[]"},
-    {"column_name": "tags", "column_type": "VARCHAR[]"}
+    {"column_name": "tags", "column_type": "VARCHAR[]"},
+    {"column_name": "m", "column_type": "MAP(VARCHAR, INTEGER)"},
+    {"column_name": "g", "column_type": "GEOMETRY"}
   ],
   "record_set": {
     "id": "t",
@@ -19,12 +21,17 @@
         {"name": "a", "dataType": ["cr:Int32"], "transformJsonPath": "a"},
         {"name": "it's", "dataType": ["cr:Float64"], "transformJsonPath": "$['it\\'s']"}
       ]},
-      {"name": "tags", "dataType": ["sc:Text"], "source": "t.parquet", "column": "tags", "isArray": "true", "arrayShape": "-1"}
+      {"name": "tags", "dataType": ["sc:Text"], "source": "t.parquet", "column": "tags", "isArray": "true", "arrayShape": "-1"},
+      {"name": "m", "source": "t.parquet", "column": "m", "isArray": "true", "arrayShape": "-1", "subField": [
+        {"name": "key", "dataType": ["sc:Text"], "transformJsonPath": "$[0]"},
+        {"name": "value", "dataType": ["cr:Int32"], "transformJsonPath": "$[1]"}
+      ]},
+      {"name": "g", "dataType": ["sc:GeoShape", "sc:Text"], "source": "t.parquet", "column": "g"}
     ]
   },
   "warning_paths": ["croissant.recordSet.1.field.2.subField.3"],
   "rows": [
-    {"id": 1, "s": {"a": 1, "geo id": "x", "n": {"b": 2}}, "l": [{"a": 1, "it's": 1.5}, {"a": 2, "it's": 2.5}], "tags": ["x", "y"]},
-    {"id": 2, "s": {"a": 3, "geo id": "y", "n": {"b": 4}}, "l": [], "tags": []}
+    {"id": 1, "s": {"a": 1, "geo id": "x", "n": {"b": 2}}, "l": [{"a": 1, "it's": 1.5}, {"a": 2, "it's": 2.5}], "tags": ["x", "y"], "m": [["k1", 1], ["k2", 2]], "g": "0101000000000000000000f03f0000000000000040"},
+    {"id": 2, "s": {"a": 3, "geo id": "y", "n": {"b": 4}}, "l": [], "tags": [], "m": [], "g": "010100000000000000000000400000000000000840"}
   ]
 }
