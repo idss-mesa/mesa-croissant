@@ -275,6 +275,41 @@ def test_schema_parity_record_set_loads_its_records(tmp_path):
     assert first["t/g"] == b"0101000000000000000000f03f0000000000000040"
 
 
+def test_from_schema_unique_ids_keep_colliding_columns_apart(tmp_path):
+    """1.3.1: from_schema gives a column 'a b' the id t/a_b-2 when a column 'a_b' exists
+    (1.3.0 gave both t/a_b, and mlcroissant merged them into one field). With the unique
+    ids both columns load as separate fields with their own values."""
+    import hashlib
+
+    model = {
+        "name": _leaves("T"), "description": _leaves("t"),
+        "license": [_leaves("https://creativecommons.org/licenses/by/4.0/")],
+        "creator": [{"name": _leaves("MESA"), "type": _leaves("Organization")}],
+        "datePublished": _leaves("2026-11-06"),
+        "distribution": [{"id": _leaves("t.jsonl"), "type": _leaves("FileObject"),
+                          "contentUrl": _leaves("t.jsonl"),
+                          "encodingFormat": _leaves("application/jsonlines")}],
+        # What mesa_croissant_from_schema writes for the columns 'a b', 'a_b'.
+        "recordSet": [_leaves({"id": "t", "field": [
+            {"name": "a b", "id": "t/a_b-2", "dataType": ["sc:Text"], "source": "t.jsonl",
+             "column": "a b"},
+            {"name": "a_b", "dataType": ["sc:Text"], "source": "t.jsonl", "column": "a_b"},
+        ]})],
+    }
+    item = {"path": "/iplant/home/shared/x", "name": "x", "is_folder": True}
+    out = core.to_jsonld(core.model_to_avus(model), item=item)
+    assert out["validation"]["errors"] == []
+    doc = out["document"]
+    data = json.dumps({"a b": "x", "a_b": "y"}) + "\n"
+    (tmp_path / "t.jsonl").write_text(data, encoding="utf-8")
+    doc["distribution"][0].update({"contentUrl": "t.jsonl",
+                                   "md5": hashlib.md5(data.encode()).hexdigest()})
+    (tmp_path / "metadata.json").write_text(json.dumps(doc), encoding="utf-8")
+    records = list(mlc.Dataset(jsonld=str(tmp_path / "metadata.json")).records("t"))
+    assert len(records) == 1
+    assert records[0]["t/a_b-2"] in (b"x", "x") and records[0]["t/a_b"] in (b"y", "y")
+
+
 # ---------------------------------------------------------------------------
 # Parquet record loading (needs pyarrow: pip install "mlcroissant[parquet]")
 # ---------------------------------------------------------------------------

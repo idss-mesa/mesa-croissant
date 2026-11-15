@@ -649,9 +649,9 @@ class TestModelToAvus:
         rows = [r for r in key_catalog() if "<sub>" not in r["attribute"]]
         avus = []
         for i, row in enumerate(rows):
+            if row["attribute"].endswith("field.M.dataType.K"):
+                continue  # the bare dataType row is the same path (dataType.1)
             attr = row["attribute"].replace(".N", ".1").replace(".M", ".1").replace(".K", ".1")
-            if attr.endswith("field.1.dataType.1"):
-                attr = attr[:-2]
             unit = "ENVO:1" if attr == "croissant.keyword.1" else ""
             avus.append(A(attr, f"v{i}", unit))
         p = parse_avus(avus)
@@ -2814,6 +2814,14 @@ class TestKeyCatalog:
         assert rows["croissant.rai.dataBiases.N"]["cardinality"] == "many"
         assert rows["croissant.rai.dataCollection"]["cardinality"] == "one"
         assert rows["croissant.keyword.N"]["unit"] == "optional CURIE or IRI"
+        # 1.3.1: required = required in each given entry, so publisher.N.name too.
+        assert rows["croissant.publisher.N.name"]["required"]
+        assert not rows["croissant.publisher.N.url"]["required"]
+        assert rows["croissant.recordSet.N.field.M.dataType"]["cardinality"] == "one"
+        assert rows["croissant.recordSet.N.field.M.dataType.K"]["cardinality"] == "many"
+        person = [r for r in rows.values() if ".creator.N." in r["attribute"]]
+        assert [r["required"] for r in person] == [
+            r["required"] for r in rows.values() if ".publisher.N." in r["attribute"]]
         assert rows["croissant.geo.spatialResolution"]["unit"] == "unit text"
         assert len([r for r in rows.values() if r["level"] == "rai"]) == 20
 
@@ -3347,3 +3355,56 @@ class TestBlankValues:
         ]
         # Non-blank values are never trimmed.
         assert triples(model_to_avus({"name": " N "})) == [("croissant.name", " N ", "")]
+
+
+# ---------------------------------------------------------------------------
+# 1.3.1: deeply nested JSON
+# ---------------------------------------------------------------------------
+
+
+def _nested(depth):
+    node = {"@type": "sc:Dataset"}
+    for _ in range(depth - 1):
+        node = {"x": node}
+    return node
+
+
+class TestJsonDepth:
+    DEEP_TEXT = "[" * 100000 + "]" * 100000
+
+    def test_deep_text_is_an_error_not_a_recursion_error(self):
+        for text in (self.DEEP_TEXT, "[" * 101 + "]" * 101):
+            r = validate(text)
+            assert r["valid"] is False
+            assert messages(r["errors"]) == [
+                ("", f"the document is nested more than {core.MAX_JSON_DEPTH} levels deep")]
+            assert from_jsonld(text) == {"avus": [], "warnings": [], "errors": r["errors"]}
+            assert from_jsonld(text.encode())["errors"] == r["errors"]
+
+    def test_deep_objects_are_refused_before_the_walk(self):
+        deep = _nested(5000)  # deeper than Python's recursion limit
+        assert validate(deep)["errors"][0]["message"].startswith("the document is nested")
+        assert from_jsonld(deep)["errors"][0]["message"].startswith("the document is nested")
+        assert core._too_deep(_nested(core.MAX_JSON_DEPTH)) is False
+        assert core._too_deep(_nested(core.MAX_JSON_DEPTH + 1)) is True
+        assert core._too_deep([[[]]], 3) is False and core._too_deep([[[[]]]], 3) is True
+        assert core._too_deep("[[[[") is False
+
+    def test_up_to_the_limit_is_validated(self):
+        r = validate("[" * core.MAX_JSON_DEPTH + "]" * core.MAX_JSON_DEPTH)
+        assert messages(r["errors"]) == [("", "document must be a JSON object")]
+        r = validate(_nested(core.MAX_JSON_DEPTH))
+        assert not has_msg(r["errors"], "", "nested")
+
+    def test_deep_inline_data_is_emitted_as_text(self):
+        base = list(MINIMAL)
+        for depth in (65, 1300):  # 1,300 levels: json.loads raises RecursionError
+            text = "[" * depth + "]" * depth
+            out = to_jsonld(base + [A("croissant.recordSet.1.data", text)], item=FOLDER)
+            assert out["document"]["recordSet"][0]["data"] == text
+            assert has_msg(out["validation"]["warnings"], "croissant.recordSet.1.data",
+                           "nested more than 64 levels")
+            assert not has_msg(out["validation"]["errors"], "", "nested")
+        text = "[" * 64 + "]" * 64
+        out = to_jsonld(base + [A("croissant.recordSet.1.data", text)], item=FOLDER)
+        assert isinstance(out["document"]["recordSet"][0]["data"], list)

@@ -30,8 +30,8 @@ documents are accepted on import.
 | `mesa_croissant_template` | `{level}`: `dataset`, `rai`, `geo`, `file`, `distribution`, `recordset` or `all` | Returns the key catalog: attribute, cardinality, required, unit, description. |
 | `mesa_croissant_export` | `{path, url?, keyword_style?}` | Reads the item's AVUs (and a file's stat size and MD5), runs `to_jsonld` and returns `{document, sources, validation, croissant_avu_count}`. |
 | `mesa_croissant_validate` | `{document}` or `{path}` | Returns the `validate` report. |
-| `mesa_croissant_apply` | `{path, document? \| avus?, mode: merge\|replace, drop_unknown=false, dry_run=true, content_base?}` | Imports the document (or takes the AVUs), diffs the new AVUs against the item's `croissant.*` AVUs and returns `{add, remove, unchanged}` with the validation of the resulting document. Unless `dry_run`, writes the diff and mirrors it into the DuckLake AVU history as one snapshot. |
-| `mesa_croissant_from_schema` | `{columns: [{name, type}], record_set_id, source_id, record_set_index=1, record_set_name?, description?}` | Builds record-set AVUs from a DuckDB or Arrow schema. STRUCT members get `transformJsonPath` = the member name (`$['…']` unless a plain identifier), so mlcroissant loads them; a member that is itself a STRUCT is typed `sc:Text` without one. Writes nothing. |
+| `mesa_croissant_apply` | `{path, document? \| avus?, mode: merge\|replace, drop_unknown=false, dry_run=true, content_base?}` | Imports the document (or takes the AVUs, which must use canonical keys), diffs the new AVUs against the item's `croissant.*` AVUs and returns `{add, remove, unchanged}` with the validation of the resulting document. Unless `dry_run`, writes the diff and mirrors it into the DuckLake AVU history as one snapshot. |
+| `mesa_croissant_from_schema` | `{columns: [{name, type}], record_set_id, source_id, record_set_index=1, record_set_name?, description?}` | Builds record-set AVUs from a DuckDB or Arrow schema (at most 1,249 columns and 5,000 AVUs, one apply call). STRUCT members get `transformJsonPath` = the member name (`$['…']` unless a plain identifier), so mlcroissant loads them; a member that is itself a STRUCT is typed `sc:Text` without one. `column` keeps the exact column name; a name with whitespace gets a unique explicit `id`. Writes nothing. |
 
 How `mesa_croissant_apply` behaves:
 
@@ -51,13 +51,21 @@ How `mesa_croissant_apply` behaves:
   unknown keys only is left behind; the warning on that entity says so. An entity that
   already has only unknown keys stays. Non-`croissant.*` AVUs are never touched in either
   mode.
-- **Whitespace.** Values are compared the way iRODS stores what the tool writes (stripped),
-  so a stored value that differs only by surrounding whitespace is unchanged. Removes use the
-  exact stored triple.
-- **Dry run.** `dry_run` is true by default.
+- **Canonical keys.** `avus` must use canonical keys (convention rules 5 and 6): indexes `1`,
+  `2`, ... without leading zeros, signs or gaps, no empty segment, and one value per
+  single-valued path or index. `croissant.license.01`, `croissant.creator.0.name`,
+  `croissant.keyword.1` with `croissant.keyword.3`, or `croissant.name` twice are import
+  errors naming the attributes. Unknown `croissant.*` keys are accepted with a warning.
+- **Whitespace.** New attributes, values and units are written trimmed of leading and
+  trailing whitespace (mesa-mcp's iRODS helper strips every triple), with a warning naming
+  each trimmed attribute; line breaks inside a value are kept (convention rule 3). Values
+  are compared the same way, so a stored value that differs only by surrounding whitespace
+  is unchanged. Removes use the exact stored triple.
+- **Dry run.** `dry_run` is true by default. More than 5,000 AVUs, or a document nested more
+  than 100 levels deep, is refused with `invalid_argument` in a dry run too.
 - **Write order.** Adds are written before removes. If an add fails, the old value of that
   path is kept. If the new set has import errors (non-`croissant.*` attributes, empty
-  values, values over 2,700 characters, more than 5,000 AVUs), the tool writes nothing and
+  values, values over 2,700 characters, non-canonical keys), the tool writes nothing and
   returns `croissant_invalid`.
 - **Files.** A document applied to a file is imported in item mode: the FileObject that
   describes the file becomes `croissant.file.*` (its `@id`, `contentUrl`, `contentSize`,
@@ -82,7 +90,7 @@ How `mesa_croissant_apply` behaves:
 | Part | Status |
 |---|---|
 | AVU convention v1 (`docs/AVU_CONVENTION.md`) | done |
-| `core.py` codec, generator, importer, validator, type maps | done, `CORE_VERSION` 1.2.0 |
+| `core.py` codec, generator, importer, validator, type maps | done, `CORE_VERSION` 1.3.1 ([CHANGELOG.md](CHANGELOG.md)) |
 | Golden fixtures and upstream import fixtures (pinned mlcommons examples) | done |
 | mlcroissant 1.1.1 compatibility tests (optional) | done; see the caveats below |
 | MESA-MCP plugin (`mesa_croissant_*`) | done |
@@ -227,6 +235,25 @@ Known mlcroissant 1.1.1 differences (see `tests/test_mlcroissant_compat.py`):
 
 Running the compatibility tests: `pip install "mlcroissant[parquet]" pytest` and then `pytest
 tests/test_mlcroissant_compat.py`. They skip themselves when mlcroissant is absent.
+
+## Behaviours worth knowing
+
+Confirmed by the live MCP test on the public `neon-ducklake` lake and kept as they are (details
+in [DESIGN.md](docs/DESIGN.md#behaviours-worth-knowing)):
+
+- Public `contentUrl`s point at dav-anon, which redirects (301) to `/iplant/projects/...`.
+- `core.validate` is stricter than mlcroissant on required properties, URLs, creator names
+  and geo values; a missing checksum is only a warning here (an error in mlcroissant).
+- A folder export has `distribution: []` until `croissant.distribution.*` AVUs exist; the
+  DuckLake suggestions run in the portal, not over MCP.
+- DuckLake's native `list` type maps to `sc:Text`; lower-case `int8` is Arrow's `cr:Int8`,
+  DuckDB's `INT8` is `cr:Int64`.
+- Unknown tool arguments are ignored and values are coerced (`"true"`); a misspelt
+  `dry_run` keeps the default `true`. `drop_unknown` works in `replace` mode only.
+- Only a `document` loses its generated values (`drop_generated`); `avus` do not. A `name`
+  equal to its `id` is a default the importer leaves out.
+- The anonymous read allowlist is mesa-mcp's, narrower than iRODS ACLs. `export(url=...)`
+  uses the URL as given and the validation reports a non-http(s) one.
 
 ## The Croissant ecosystem
 

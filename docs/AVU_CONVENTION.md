@@ -36,20 +36,35 @@ are converted to their 1.1 forms).
    ISO 8601 (`2024-03-01`, `2024`, `2024-03-01T12:00:00Z`). A value is never empty (iRODS
    refuses empty values); an absent property is an absent AVU. A whitespace-only value counts
    as empty: readers ignore it with a warning (editors drop it on the next save) and importers
-   leave it out with a warning. Non-blank values are never trimmed. Values are at most 2,700
-   characters and units at most 250 (portal and Terrain limits).
+   leave it out with a warning. Values are at most 2,700 characters and units at most 250
+   (portal and Terrain limits).
+
+   **Whitespace.** Readers and the codec never trim a non-blank stored value: they show,
+   compare and write back exactly what is stored (data-info compares AVUs exactly). Writers
+   store *new* values and units trimmed of leading and trailing whitespace: the portal editor
+   trims the text typed into its fields, and `mesa_croissant_apply` trims every attribute,
+   value and unit it writes (mesa-mcp's iRODS helper strips every triple), with a warning
+   naming each attribute it trimmed. Whitespace inside a value is kept, so a multi-line
+   description keeps its line breaks and loses only a trailing newline. A value whose
+   surrounding whitespace matters (a `column` name with padding) therefore cannot be written
+   through these tools; `mesa_croissant_from_schema` warns about such a column.
 4. **Units are empty** unless this document gives them a meaning:
    - `croissant.keyword.N`: optional CURIE or IRI of the term (makes a `DefinedTerm`), the
      same rule as MESA ontology AVUs (`unit = CURIE`).
    - `croissant.geo.spatialResolution`, `croissant.geo.temporalResolution`: unit text such as
      `m`, `km`, `s`, `day` (becomes `QuantitativeValue.unitText`).
    - `croissant.distribution.N.contentSize`: optional unit, default `B`.
-5. **Indexes.** Writers number from 1 without gaps. Readers sort by index, accept gaps and
-   ignore index 0. A property listed as repeatable below may also be written without an
-   index (`croissant.license` is read as `croissant.license.1`).
+5. **Indexes.** Writers number from 1 without gaps, without leading zeros (`1`, not `01`).
+   Readers sort by index, accept gaps and leading zeros, and ignore index 0. A property
+   listed as repeatable below may also be written without an index (`croissant.license` is
+   read as `croissant.license.1`). `mesa_croissant_apply` refuses a new set that breaks the
+   writer rule (index 0, `01`, `007`, `-1`, an empty segment such as `croissant..name`, or a
+   gap such as `keyword.1` with `keyword.3`), with an error naming the attributes; AVUs
+   already stored are read as above.
 6. **One value per path.** Two AVUs with the same attribute are an error for scalar paths
-   (and for the same index of a repeatable property); readers use the first in AVU order and
-   report a warning. Editors keep the extra values: they are written back on save (with
+   (and for the same index of a repeatable property, `croissant.license` next to
+   `croissant.license.1` included); readers use the first in AVU order and report a
+   warning, and `mesa_croissant_apply` refuses such a new set. Editors keep the extra values: they are written back on save (with
    their entity when the path is below one, see rule 7) until someone deletes them in
    the raw AVU view. Only the first value reaches the JSON-LD. An extra value at an index
    of a repeatable property belongs to the value it duplicates: when an editor renumbers
@@ -218,11 +233,11 @@ is left out (fields default to it). Every other distribution entry is reported a
 | Sub-key | Notes |
 |---|---|
 | `name` | **required** |
-| `id` | defaults to `<recordSet id>/<name>` |
+| `id` | defaults to `<recordSet id>/<name>`; unique in the dataset. Writers give an explicit `id` when the default contains whitespace: the default with each run of whitespace replaced by `_` (`mesa_croissant_from_schema` adds `-2`, `-3`, ... when that id is another field's default or already taken, so `a b` next to a column `a_b` gets `<recordSet id>/a_b-2`) |
 | `description` | |
 | `dataType` / `dataType.K` | one or several types: `sc:Text`, `sc:Integer`, `sc:Float`, `sc:Boolean`, `sc:Date`, `sc:DateTime`, `sc:Time`, `sc:URL`, `sc:ImageObject`, `sc:GeoShape`, `sc:GeoCoordinates`, `cr:Int8…cr:Int64`, `cr:UInt8…cr:UInt64`, `cr:Float16/32/64`, `cr:BoundingBox`, `cr:Label`, `cr:Split`, `cr:SegmentationMask`, or any CURIE/IRI. The `sc:`/`cr:` prefix is optional on read. mlcroissant 1.1.1 reads a field's values with the first of its types it knows: `sc:Boolean`, `sc:Date`, `sc:DateTime`, `sc:Float`, `sc:Integer`, `sc:Text`, `sc:Time`, `sc:URL`, `cr:Int*`, `cr:UInt*`, `cr:Float*`, `sc:ImageObject`, `sc:AudioObject`, `sc:VideoObject`, `cr:BoundingBox`. A semantic type it does not read (`sc:GeoShape`, `sc:GeoCoordinates`, `sc:Number`, `sc:Enumeration`, `cr:Label`, `cr:Split`, `cr:SegmentationMask`, other CURIEs) should be given next to one it reads, e.g. `dataType.1 = sc:GeoShape`, `dataType.2 = sc:Text`; a field with none of them (and no subFields, and no field as its source) gets a validator warning, not an error |
 | `source` | `id` of a distribution entry (FileObject or FileSet) or of another record set. With a record set and a `column` naming one of its fields the source is emitted as that field; a bare record-set source is valid Croissant 1.1 but mlcroissant 1.1 cannot load it (the validator warns) |
-| `column` | `extract.column` (CSV, Parquet) |
+| `column` | `extract.column` (CSV, Parquet): the exact column name (the field `name` may be trimmed, the column is not) |
 | `jsonPath` | `extract.jsonPath` |
 | `fileProperty` | `extract.fileProperty`: `fullpath`, `filename`, `content`, `lines`, `lineNumbers` |
 | `regex` | `transform.regex` |

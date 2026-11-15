@@ -18,7 +18,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import FIXTURES, load_json
+from conftest import FIXTURES, golden_paths, import_paths, load_json, upstream_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -995,7 +995,8 @@ def test_from_schema_builds_record_set_avus() -> None:
     assert got["croissant.recordSet.1.field.4.description"] == "when"
     assert "croissant.recordSet.1.field.5.name" not in got
     warned = {w["path"] for w in res["warnings"]}
-    assert "croissant.recordSet.1.field.5" in warned
+    # A skipped column has no field: its warning names the input position.
+    assert "columns[4]" in warned and "croissant.recordSet.1.field.5" not in warned
     assert "croissant.recordSet.1.field.3.subField.3" in warned
     assert all(a["unit"] == "" for a in res["avus"])
     # The AVUs parse back under the convention without unknown keys.
@@ -1109,3 +1110,352 @@ def test_from_schema_index_and_input_checks() -> None:
     with pytest.raises(ToolError):
         run(mt.handle_from_schema(mt.FromSchemaInput(columns=[], record_set_id="t",
                                                      source_id="s")))
+
+
+# -- 1.3.1: from_schema ids, exact columns, limits ---------------------------------------------
+
+
+def test_from_schema_ids_are_unique_and_columns_exact() -> None:
+    """A whitespace-normalised id never takes a real column's default id (live finding: 'a b'
+    and 'a_b' both got t/a_b); the column keeps the exact name while the field name is
+    trimmed; skipped columns are named by their input position, not by an emitted field."""
+    cols = [
+        {"name": "a b", "type": "VARCHAR"},       # field 1: explicit id, a_b is taken
+        {"name": "a_b", "type": "VARCHAR"},       # field 2: keeps its default id t/a_b
+        {"name": "a  b", "type": "INTEGER"},      # field 3: t/a_b-3 (t/a_b-2 is taken)
+        {"name": "a", "type": "INTEGER"},         # field 4
+        {"name": "a", "type": "BIGINT"},          # columns[4]: duplicate, skipped
+        {"name": "  ", "type": "INTEGER"},        # columns[5]: blank, skipped
+        {"name": "  padded  ", "type": "INTEGER"},  # field 5
+        {"name": "s", "type": 'STRUCT("x y" INTEGER, x_y INTEGER)'},  # field 6
+    ]
+    res = run(mt.handle_from_schema(mt.FromSchemaInput(
+        columns=cols, record_set_id="t", source_id="ratings-csv")))
+    got = {a["attribute"]: a["value"] for a in res["avus"]}
+    f = "croissant.recordSet.1.field."
+    assert got[f + "1.id"] == "t/a_b-2" and got[f + "1.column"] == "a b"
+    assert f + "2.id" not in got and got[f + "2.name"] == "a_b"
+    assert got[f + "3.id"] == "t/a_b-3"
+    assert got[f + "4.column"] == "a" and got[f + "4.dataType"] == "cr:Int32"
+    assert got[f + "5.name"] == "padded" and got[f + "5.column"] == "  padded  "
+    assert f + "5.id" not in got
+    assert got[f + "6.subField.1.id"] == "t/s/x_y-2"
+    assert got[f + "6.subField.1.transformJsonPath"] == "$['x y']"
+    assert f + "6.subField.2.id" not in got
+    assert f + "7.name" not in got
+    paths = [w["path"] for w in res["warnings"]]
+    assert paths == ["columns[4]", "columns[5]", f + "5.column"], res["warnings"]
+    assert "croissant.recordSet.1.field.4" in res["warnings"][0]["message"]
+    assert "rename the column" in res["warnings"][2]["message"]
+    base = [a for a in GOLDEN["avus"] if not a["attribute"].startswith("croissant.recordSet.")]
+    out = core.to_jsonld(base + res["avus"], item=GOLDEN["item"])
+    assert out["validation"]["valid"] is True, out["validation"]["errors"]
+    ids = [fl["@id"] for fl in out["document"]["recordSet"][0]["field"]]
+    assert ids == ["t/a_b-2", "t/a_b", "t/a_b-3", "t/a", "t/padded", "t/s"]
+    assert out["document"]["recordSet"][0]["field"][4]["source"]["extract"] == {
+        "column": "  padded  "}
+
+
+def test_from_schema_ids_are_deterministic() -> None:
+    cols = [{"name": n, "type": "INTEGER"} for n in ("x y", "x_y", "x\ty", "x_y-2")]
+    runs = [run(mt.handle_from_schema(mt.FromSchemaInput(
+        columns=cols, record_set_id="t", source_id="s")))["avus"] for _ in range(2)]
+    assert runs[0] == runs[1]
+    ids = [core._field_id(fl, "t") for fl in
+           core.parse_avus(runs[0])["model"]["recordSet"][0]["field"]]
+    assert len(set(ids)) == 4 and ids[1] == "t/x_y" and ids[3] == "t/x_y-2"
+
+
+def test_from_schema_warns_about_values_over_the_avu_limits() -> None:
+    res = run(mt.handle_from_schema(mt.FromSchemaInput(
+        columns=[{"name": "long", "type": "INTEGER", "description": "x" * 3000},
+                 {"name": "c" * (core.VALUE_MAX + 1), "type": "INTEGER"}],
+        record_set_id="t", source_id="s")))
+    msgs = {w["path"]: w["message"] for w in res["warnings"]}
+    assert "3000 characters" in msgs["croissant.recordSet.1.field.1.description"]
+    assert "refuses" in msgs["croissant.recordSet.1.field.1.description"]
+    assert "croissant.recordSet.1.field.2.column" in msgs
+    assert "croissant.recordSet.1.field.2.name" in msgs
+
+
+def test_from_schema_column_cap_follows_the_avu_limit() -> None:
+    assert mt.MAX_COLUMNS == (mt.MAX_AVUS - 3) // 4 == 1249
+    cols = [{"name": f"c{i}", "type": "INTEGER"} for i in range(mt.MAX_COLUMNS)]
+    res = run(mt.handle_from_schema(mt.FromSchemaInput(
+        columns=cols, record_set_id="t", source_id="s", record_set_name="T",
+        description="d")))
+    assert len(res["avus"]) <= mt.MAX_AVUS
+    with pytest.raises(ToolError) as exc:
+        run(mt.handle_from_schema(mt.FromSchemaInput(
+            columns=[*cols, {"name": "one more", "type": "INTEGER"}],
+            record_set_id="t", source_id="s")))
+    assert exc.value.code == "invalid_argument"
+    # STRUCT columns give more AVUs per column: a result over MAX_AVUS is refused.
+    wide = [{"name": f"s{i}", "type": "STRUCT(a INTEGER, b INTEGER, c INTEGER)"}
+            for i in range(600)]
+    with pytest.raises(ToolError) as exc:
+        run(mt.handle_from_schema(mt.FromSchemaInput(columns=wide, record_set_id="t",
+                                                     source_id="s")))
+    assert exc.value.code == "invalid_argument"
+    assert str(mt.MAX_AVUS) in exc.value.message
+
+
+def test_from_schema_empty_struct_is_text_with_a_warning() -> None:
+    res = run(mt.handle_from_schema(mt.FromSchemaInput(
+        columns=[{"name": "u", "type": "STRUCT()"}, {"name": "v", "type": "STRUCT()[]"}],
+        record_set_id="t", source_id="s")))
+    got = {a["attribute"]: a["value"] for a in res["avus"]}
+    assert got["croissant.recordSet.1.field.1.dataType"] == "sc:Text"
+    assert got["croissant.recordSet.1.field.2.dataType"] == "sc:Text"
+    assert got["croissant.recordSet.1.field.2.isArray"] == "true"
+    assert not any(".subField." in a for a in got)
+    assert [w["path"] for w in res["warnings"]] == [
+        "croissant.recordSet.1.field.1", "croissant.recordSet.1.field.2"]
+    assert "STRUCT without members" in res["warnings"][0]["message"]
+
+
+def test_from_schema_avus_from_1_3_0_still_parse_and_export() -> None:
+    """Backward compatibility: what 1.3.0 wrote for 'a b' (id t/a_b, column trimmed) and a
+    duplicate id it could produce still parse and export; validate names the duplicate."""
+    old = [
+        avu("croissant.recordSet.1.id", "t"),
+        avu("croissant.recordSet.1.field.1.name", "a b"),
+        avu("croissant.recordSet.1.field.1.id", "t/a_b"),
+        avu("croissant.recordSet.1.field.1.dataType", "sc:Text"),
+        avu("croissant.recordSet.1.field.1.source", "ratings-csv"),
+        avu("croissant.recordSet.1.field.1.column", "a b"),
+        avu("croissant.recordSet.1.field.2.name", "a_b"),
+        avu("croissant.recordSet.1.field.2.dataType", "sc:Text"),
+        avu("croissant.recordSet.1.field.2.source", "ratings-csv"),
+        avu("croissant.recordSet.1.field.2.column", "a_b"),
+    ]
+    parsed = core.parse_avus(old)
+    assert parsed["unknown"] == [] and parsed["warnings"] == []
+    assert sorted(triples(core.model_to_avus(parsed["model"]))) == sorted(triples(old))
+    base = [a for a in GOLDEN["avus"] if not a["attribute"].startswith("croissant.recordSet.")]
+    out = core.to_jsonld(base + old, item=GOLDEN["item"])
+    assert [f["@id"] for f in out["document"]["recordSet"][0]["field"]] == ["t/a_b", "t/a_b"]
+    assert any("duplicate @id" in e["message"] for e in out["validation"]["errors"])
+    # The 1.3.0 AVUs are canonical keys: apply takes them as a new set.
+    assert mt._key_errors(old) == ([], set())
+
+
+# -- 1.3.1: apply refuses non-canonical keys and duplicate values -------------------------------
+
+
+@pytest.mark.parametrize(("attrs", "path", "text"), [
+    (["croissant.license.01"], "croissant.license.01", "not canonical"),
+    (["croissant.creator.007.name"], "croissant.creator.007.name", "not canonical"),
+    (["croissant.creator.0.name"], "croissant.creator.0.name", "not canonical"),
+    (["croissant.distribution.-1.id"], "croissant.distribution.-1.id", "not canonical"),
+    (["croissant.recordSet.1.field.+2.name"], "croissant.recordSet.1.field.+2.name",
+     "not canonical"),
+    (["croissant..name"], "croissant..name", "empty segment"),
+    (["croissant.name."], "croissant.name.", "empty segment"),
+    (["croissant.keyword.1", "croissant.keyword.3"], "croissant.keyword", "gap at 2"),
+    (["croissant.recordSet.2.id"], "croissant.recordSet", "gap at 1"),
+    (["croissant.recordSet.1.id", "croissant.recordSet.1.field.2.name"],
+     "croissant.recordSet.1.field", "gap at 1"),
+    (["croissant.recordSet.1.field.1.name", "croissant.recordSet.1.field.1.subField.2.name"],
+     "croissant.recordSet.1.field.1.subField", "gap at 1"),
+])
+def test_apply_refuses_non_canonical_keys(irods, attrs, path, text) -> None:
+    fake = irods([])
+    new = [avu(a, f"v{i}") for i, a in enumerate(attrs)]
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=new), auth_value=AUTH))
+    hit = [e for e in res["import_errors"] if e["path"] == path]
+    assert hit and text in hit[0]["message"], res["import_errors"]
+    # The codec's own warning about the same key is not repeated.
+    assert not any(w["path"] == path and "unknown Croissant key" in w["message"]
+                   for w in res["warnings"])
+    with pytest.raises(ToolError) as exc:
+        run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=new, dry_run=False),
+                            auth_value=AUTH))
+    assert exc.value.code == "croissant_invalid"
+    assert fake.added == []
+
+
+@pytest.mark.parametrize("new", [
+    [avu("croissant.name", "A"), avu("croissant.name", "B")],
+    [avu("croissant.license", "https://a.org/l"), avu("croissant.license.1", "https://b.org/l")],
+    [avu("croissant.license", "https://a.org/l"), avu("croissant.license.1", "https://a.org/l")],
+    [avu("croissant.keyword.1", "grass", "ENVO:1"), avu("croissant.keyword.1", "grass", "ENVO:2")],
+    [avu("croissant.recordSet.1.id", "t"), avu("croissant.recordSet.1.field.1.name", "x"),
+     avu("croissant.recordSet.1.field.1.dataType", "sc:Text"),
+     avu("croissant.recordSet.1.field.1.dataType.1", "cr:Int64")],
+    [avu("croissant.creator.name", "A"), avu("croissant.creator.1.name", "B")],
+])
+def test_apply_refuses_two_values_for_one_path(irods, new) -> None:
+    irods([])
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=new), auth_value=AUTH))
+    errs = [e for e in res["import_errors"] if "rule 6" in e["message"]]
+    assert len(errs) == 1 and len(res["import_errors"]) == 1, res["import_errors"]
+    for a in new[-2:]:  # the two values of one path
+        assert a["attribute"] in errs[0]["message"]
+    assert not any("duplicate value" in w["message"] for w in res["warnings"])
+
+
+def test_apply_live_finding_bad_index_set_is_refused(irods) -> None:
+    """The live test's 13-AVU set (13 adds, no import error under 1.3.0)."""
+    irods([])
+    bad = [
+        avu("croissant.description", "ok"), avu("croissant.creator.0.name", "Zero"),
+        avu("croissant.license.01", "https://example.org/l"), avu("croissant.keyword.1", "a"),
+        avu("croissant.keyword.3", "c"), avu("croissant.recordSet.0.id", "rs0"),
+        avu("croissant.recordSet.2.field.5.name", "gapfield"),
+        avu("croissant.creator.007.name", "Bond"), avu("croissant.distribution.-1.id", "neg"),
+        avu("croissant.license.1.extra", "x"), avu("croissant.name.1", "x"),
+        avu("croissant..name", "x"), avu("croissant.foo", "unknown"),
+    ]
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=bad), auth_value=AUTH))
+    paths = {e["path"] for e in res["import_errors"]}
+    assert {"croissant.creator.0.name", "croissant.license.01", "croissant.keyword",
+            "croissant.recordSet.0.id", "croissant.recordSet",
+            "croissant.recordSet.2.field", "croissant.creator.007.name",
+            "croissant.distribution.-1.id", "croissant..name"} == paths
+    # Unknown keys stay accepted, with the codec's warning (rule 7).
+    warned = {w["path"] for w in res["warnings"]}
+    assert {"croissant.license.1.extra", "croissant.name.1", "croissant.foo"} <= warned
+
+
+def test_apply_accepts_canonical_sets(irods) -> None:
+    irods([])
+    new = [avu("croissant.license", "https://a.org/l"), avu("croissant.keyword.1", "a"),
+           avu("croissant.keyword.2", "b"), avu("croissant.creator.name", "A"),
+           avu("croissant.creator.2.name", "B"), avu("croissant.custom.thing", "unknown"),
+           avu("croissant.creator.3.orcidVerified", "true"),
+           avu("croissant.name", "N"), avu("croissant.name", "N")]
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=new), auth_value=AUTH))
+    assert res["import_errors"] == []
+    assert res["counts"]["new"] == 8  # identical triples are written once
+
+
+def test_key_checks_pass_every_imported_document() -> None:
+    """Documents imported by from_jsonld (folder and file item mode) never trip them."""
+    docs = [load_json(p)["document"] for p in golden_paths()]
+    docs += [load_json(p) for p in upstream_paths() + import_paths()]
+    assert len(docs) >= 10
+    for doc in docs:
+        for item in (None, {"path": FOLDER, "name": "demo", "is_folder": True},
+                     {"path": FILE, "name": "ratings.csv", "is_folder": False}):
+            avus = core.from_jsonld(doc, item=item)["avus"]
+            assert mt._key_errors(avus) == ([], set()), (doc.get("name"), item)
+
+
+def test_apply_document_path_runs_the_key_checks(irods, monkeypatch) -> None:
+    irods([])
+    real = core.from_jsonld
+
+    def broken(*a, **kw):
+        out = real(*a, **kw)
+        out["avus"].append(avu("croissant.license.01", "https://x.org/l"))
+        return out
+
+    monkeypatch.setattr(mt.core, "from_jsonld", broken)
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, document=GOLDEN["document"]),
+                              auth_value=AUTH))
+    assert any(e["path"] == "croissant.license.01" for e in res["import_errors"])
+
+
+def test_apply_current_avus_from_1_3_0_are_not_refused(irods) -> None:
+    """Backward compatibility: non-canonical AVUs already on an item (1.3.0 accepted them)
+    still export and can be replaced; only the new set is checked."""
+    stored = [avu("croissant.license.01", "https://old.org/l"),
+              avu("croissant.keyword.1", "a"), avu("croissant.keyword.3", "c"),
+              avu("croissant.name", "A"), avu("croissant.name", "B")]
+    irods(stored)
+    exp = run(mt.handle_export(mt.ExportInput(path=FOLDER), auth_value=AUTH))
+    assert exp["document"]["name"] == "A"
+    assert exp["document"]["keywords"] == ["a", "c"]
+    for mode in ("merge", "replace"):
+        res = run(mt.handle_apply(mt.ApplyInput(
+            path=FOLDER, avus=[avu("croissant.name", "C"), avu("croissant.license.1",
+                                                                 "https://new.org/l")],
+            mode=mode), auth_value=AUTH))
+        assert res["import_errors"] == [], mode
+        removed = triples(res["diff"]["remove"])
+        assert {("croissant.name", "A", ""), ("croissant.name", "B", ""),
+                ("croissant.license.01", "https://old.org/l", "")} <= removed, mode
+
+
+def test_apply_refuses_more_than_max_avus_even_in_a_dry_run(irods) -> None:
+    irods([])
+    new = [avu("croissant.recordSet.1.id", "t")] + [
+        avu(f"croissant.recordSet.1.field.{i}.name", f"f{i}") for i in range(1, mt.MAX_AVUS + 1)]
+    with pytest.raises(ToolError) as exc:
+        run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=new), auth_value=AUTH))
+    assert exc.value.code == "invalid_argument"
+    assert exc.value.details == {"count": mt.MAX_AVUS + 1, "limit": mt.MAX_AVUS}
+    ok = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=new[:mt.MAX_AVUS]),
+                             auth_value=AUTH))
+    assert ok["counts"]["new"] == mt.MAX_AVUS
+
+
+# -- 1.3.1: trimming, deep JSON, template ------------------------------------------------------
+
+
+def test_apply_warns_when_it_trims(irods) -> None:
+    irods([])
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=[
+        avu("croissant.description", "  Line one.\nLine two.\n"),
+        avu(" croissant.version ", " 1.0.0 "),
+        avu("croissant.keyword.1", "grass", " ENVO:1 "),
+        avu("croissant.name", "Untouched")]), auth_value=AUTH))
+    assert triples(res["diff"]["add"]) == {
+        ("croissant.description", "Line one.\nLine two.", ""),
+        ("croissant.version", "1.0.0", ""), ("croissant.keyword.1", "grass", "ENVO:1"),
+        ("croissant.name", "Untouched", "")}
+    trimmed = [w["path"] for w in res["warnings"] if "trimmed" in w["message"]]
+    assert trimmed == ["croissant.description", "croissant.version", "croissant.keyword.1"]
+    doc = {**GOLDEN["document"], "description": "Ratings.\n"}
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, document=doc), auth_value=AUTH))
+    assert any(w["path"] == "croissant.description" and "trimmed" in w["message"]
+               for w in res["warnings"])
+
+
+@pytest.mark.parametrize("deep", [
+    "[" * 100000 + "]" * 100000,
+    "[" * 101 + "]" * 101,
+    '{"a":' * 500 + "1" + "}" * 500,
+])
+def test_validate_and_apply_refuse_deeply_nested_json(irods, deep) -> None:
+    irods([])
+    for call in (lambda d: mt.handle_validate(mt.ValidateInput(document=d)),
+                 lambda d: mt.handle_apply(mt.ApplyInput(path=FOLDER, document=d),
+                                           auth_value=AUTH)):
+        with pytest.raises(ToolError) as exc:
+            run(call(deep))
+        assert exc.value.code == "invalid_argument"
+        assert "nested more than 100 levels" in exc.value.message
+    obj: Any = {"@type": "sc:Dataset"}
+    for _ in range(200):
+        obj = {"x": obj}
+    with pytest.raises(ToolError):
+        run(mt.handle_validate(mt.ValidateInput(document=obj)))
+
+
+def test_validate_accepts_nesting_up_to_the_limit() -> None:
+    res = run(mt.handle_validate(mt.ValidateInput(document="[" * 100 + "]" * 100)))
+    assert res["valid"] is False and res["errors"][0]["message"] == \
+        "document must be a JSON object"
+    res = run(mt.handle_validate(mt.ValidateInput(document="{not json")))
+    assert "not valid JSON" in res["errors"][0]["message"]
+
+
+def test_template_required_flags_and_datatype_forms() -> None:
+    res = run(mt.handle_template(mt.TemplateInput(level="all")))
+    rows = {k["attribute"]: k for k in res["keys"]}
+    for attr in ("croissant.creator.N.name", "croissant.publisher.N.name",
+                 "croissant.distribution.N.id", "croissant.recordSet.N.id",
+                 "croissant.recordSet.N.field.M.name"):
+        assert rows[attr]["required"], attr
+    assert not rows["croissant.publisher.N.email"]["required"]
+    bare = rows["croissant.recordSet.N.field.M.dataType"]
+    indexed = rows["croissant.recordSet.N.field.M.dataType.K"]
+    assert (bare["cardinality"], indexed["cardinality"]) == ("one", "many")
+    assert "dataType.1" in bare["description"]
+    assert any("required:" in n for n in res["notes"])
+    # The bare form is what from_schema writes.
+    fs = run(mt.handle_from_schema(mt.FromSchemaInput(
+        columns=[{"name": "a", "type": "INTEGER"}], record_set_id="t", source_id="s")))
+    assert "croissant.recordSet.1.field.1.dataType" in {a["attribute"] for a in fs["avus"]}

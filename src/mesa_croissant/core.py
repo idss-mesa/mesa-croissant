@@ -19,7 +19,7 @@ mesa-croissant repository (``src/mesa_croissant/core.py``), bump
 Public API (see ``docs/DESIGN.md``)::
 
     CONVENTION_VERSION, CORE_VERSION, PREFIX, CONFORMS_CORE, CONFORMS_RAI,
-    CONFORMS_GEO, CONTEXT, UNKNOWN_KEY, DUP_KEY
+    CONFORMS_GEO, CONTEXT, VALUE_MAX, UNIT_MAX, MAX_JSON_DEPTH, UNKNOWN_KEY, DUP_KEY
     is_croissant_attr(attr) -> bool
     parse_avus(avus) -> {"model", "unknown", "warnings"}
     model_to_avus(model) -> [{"attribute", "value", "unit"}]
@@ -59,6 +59,7 @@ __all__ = [
     "CONTEXT",
     "VALUE_MAX",
     "UNIT_MAX",
+    "MAX_JSON_DEPTH",
     "UNKNOWN_KEY",
     "DUP_KEY",
     "is_croissant_attr",
@@ -85,6 +86,12 @@ CONFORMS_GEO = "http://mlcommons.org/croissant/geo/1.0"
 #: Largest AVU value / unit the portal and Terrain accept.
 VALUE_MAX = 2700
 UNIT_MAX = 250
+#: Deepest JSON nesting a document may have (validate, from_jsonld): deeper input is
+#: refused before it is walked. Croissant documents are about 10 levels deep.
+MAX_JSON_DEPTH = 100
+#: Deepest inline JSON (croissant.recordSet.N.data / examples) emitted as JSON; deeper text
+#: is emitted as text, so the generated document stays within MAX_JSON_DEPTH.
+_INLINE_JSON_DEPTH = 64
 
 #: Defaults used when the caller's ``item`` does not say otherwise.
 PORTAL_URL = "https://mesa.cyverse.org"
@@ -477,6 +484,26 @@ def _dav_url(base: str, path: str) -> str:
     return base.rstrip("/") + quote(path, safe="/")
 
 
+def _too_deep(node: Any, limit: int = MAX_JSON_DEPTH) -> bool:
+    """True when ``node`` nests objects / arrays more than ``limit`` levels (iteratively)."""
+    stack = [(node, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, Mapping):
+            children: Iterable[Any] = item.values()
+        elif isinstance(item, list | tuple):
+            children = item
+        else:
+            continue
+        if depth > limit:
+            return True
+        stack.extend((c, depth + 1) for c in children)
+    return False
+
+
+_TOO_DEEP = f"the document is nested more than {MAX_JSON_DEPTH} levels deep"
+
+
 def _normalize_avu(avu: Any) -> dict[str, str] | None:
     if isinstance(avu, Mapping):
         attr = avu.get("attribute", avu.get("attr"))
@@ -863,6 +890,15 @@ def key_catalog(level: str = "all") -> list[dict[str, Any]]:
     ``distribution``, ``recordset`` (record sets and fields) or ``all``. Each row is
     ``{"attribute", "cardinality" ("one"|"many"), "required", "level", "unit",
     "description"}``; ``N``/``M``/``K`` stand for 1-based indexes.
+
+    ``required`` means required where the key lives: a dataset-level key in the dataset,
+    a key below an entry (``N``, ``M``, ``K``) in every entry of that list that is given.
+    So ``creator.N.name`` and ``publisher.N.name`` are both required (each person needs a
+    name), although only ``creator`` is required in the dataset (the rows of required
+    dataset entries say so). A field's ``dataType`` has two rows: the bare
+    ``...field.M.dataType`` (one type; what ``model_to_avus`` and the MCP
+    ``mesa_croissant_from_schema`` write) and ``...field.M.dataType.K`` (several types);
+    the bare key is the same path as ``dataType.1`` (rule 5), so give one form or the other.
     """
     rows: list[dict[str, Any]] = []
 
@@ -875,8 +911,12 @@ def key_catalog(level: str = "all") -> list[dict[str, Any]]:
             continue
         if name in ("creator", "publisher"):
             for sub in _PERSON:
-                row(f"croissant.{name}.N.{sub}", "many", name == "creator" and sub == "name",
-                    "dataset", f"{name}: {_SUB_DESCRIPTIONS['person'][sub]}")
+                desc = f"{name}: {_SUB_DESCRIPTIONS['person'][sub]}"
+                if sub == "name":
+                    desc += (" (required for each entry; the dataset needs at least one creator)"
+                             if name == "creator" else " (required for each entry; publisher "
+                             "is optional)")
+                row(f"croissant.{name}.N.{sub}", "many", sub == "name", "dataset", desc)
             continue
         many = spec[0] == "L"
         attr = f"croissant.{name}.N" if many else f"croissant.{name}"
@@ -904,6 +944,10 @@ def key_catalog(level: str = "all") -> list[dict[str, Any]]:
             "many" if many else "one", key == "id", "recordset", desc)
     for key, desc in _SUB_DESCRIPTIONS["field"].items():
         many = key in ("dataType", "equivalentProperty")
+        if key == "dataType":
+            row("croissant.recordSet.N.field.M.dataType", "one", False, "recordset",
+                "a single type, written without an index (what writers write for one type; "
+                "the same path as dataType.1): " + desc)
         row(f"croissant.recordSet.N.field.M.{key}" + (".K" if many else ""),
             "many" if many else "one", key == "name", "recordset", desc)
     row("croissant.recordSet.N.field.M.subField.K.<sub>", "many", False, "recordset",
@@ -1463,11 +1507,20 @@ def _field_jsonld(field: Mapping, parent_id: str, ids: dict[str, Any],
 def _json_value(text: str, path: str, warnings: list, allow_url: bool) -> Any:
     if allow_url and _is_url(text):
         return text
+    too_deep = (_msg(path, f"JSON nested more than {_INLINE_JSON_DEPTH} levels deep; "
+                           "emitted as text"))
     try:
-        return json.loads(text)
+        value = json.loads(text)
+    except RecursionError:
+        warnings.append(too_deep)
+        return text
     except ValueError:
         warnings.append(_msg(path, "not valid JSON; emitted as text"))
         return text
+    if _too_deep(value, _INLINE_JSON_DEPTH):
+        warnings.append(too_deep)
+        return text
+    return value
 
 
 def _distribution_jsonld(entry: Mapping, base: str, warnings: list,
@@ -2646,8 +2699,12 @@ def from_jsonld(doc: Any, *, content_base: str | None = None,
     if isinstance(doc, str):
         try:
             doc = json.loads(doc)
+        except RecursionError:
+            return {"avus": [], "warnings": [], "errors": [_msg("", _TOO_DEEP)]}
         except ValueError as exc:
             return {"avus": [], "warnings": [], "errors": [_msg("", f"not valid JSON: {exc}")]}
+    if _too_deep(doc):
+        return {"avus": [], "warnings": [], "errors": [_msg("", _TOO_DEEP)]}
     if isinstance(doc, Mapping) and "@graph" in doc and "Dataset" not in _types(doc):
         nodes = [n for n in _as_list(doc.get("@graph")) if "Dataset" in _types(n)]
         if nodes:
@@ -2891,8 +2948,14 @@ def validate(doc: Any) -> dict[str, Any]:
     if isinstance(doc, str):
         try:
             doc = json.loads(doc)
+        except RecursionError:
+            doc = None
+            v.err("", _TOO_DEEP)
         except ValueError as exc:
             v.err("", f"not valid JSON: {exc}")
+    if not v.errors and _too_deep(doc):
+        doc = None
+        v.err("", _TOO_DEEP)
     if not isinstance(doc, Mapping):
         if not v.errors:
             v.err("", "document must be a JSON object")
