@@ -539,3 +539,17 @@ def test_unmapped_extension_file_loads(tmp_path):
                                               "md5": "d41d8cd98f00b204e9800998ecf8427e"})
         assert out["validation"]["errors"] == []
         assert _mlc_errors(out["document"], tmp_path)[0] == []
+
+
+def test_http_schema_org_warning_only_for_terms_in_use(tmp_path):
+    """An unused http://schema.org/ prefix in the @context loads and gives no warning; the
+    Dataset type named with it is refused and warned about (pass 5)."""
+    item = {"path": "/iplant/home/shared/x", "name": "x"}
+    doc = core.to_jsonld(BASE_AVUS + _SMALL_DIST, item=item)["document"]
+    unused = dict(doc, **{"@context": dict(doc["@context"], schema="http://schema.org/")})
+    assert not any("http://schema.org/" in w["message"]
+                   for w in core.validate(unused)["warnings"])
+    assert _mlc_refuses(unused, tmp_path) is None
+    typed = dict(unused, **{"@type": "schema:Dataset"})
+    assert any("for its Dataset type" in w["message"] for w in core.validate(typed)["warnings"])
+    assert "https://schema.org/Dataset" in (_mlc_refuses(typed, tmp_path) or "")

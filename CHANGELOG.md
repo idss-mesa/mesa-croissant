@@ -106,7 +106,8 @@ crosswalk and the generator derive and in validator warnings.
   `css`, `c` / `h` / `cpp`, `java`, `rst`, `tex`, `bib`, `docx`, `pptx`, `rdf`, `owl`, `nt`,
   `nq`, `gml`, `kmz`, `csl` (IANA types where registered, else Python's `mimetypes` /
   shared-mime-info). `encoding_format_for` still returns `None` for an unknown extension;
-  import leaves out an `application/octet-stream` that is only that default.
+  a file's import (`croissant.file.*`) leaves out an `encodingFormat` that is only the
+  derived type (writers' handling of distribution entries: pass 5).
 - **mlcroissant warnings in `validate`** (warnings, not errors; the README and DESIGN list
   them): `sc:DefinedTerm` keywords (with the hint to use `keyword_style` `text`), an
   `@context` that is not an object (mlcroissant refuses a string or list), and documents using
@@ -120,8 +121,9 @@ crosswalk and the generator derive and in validator warnings.
   the term is no longer listed twice. Otherwise the AVU value stays the name (an editor that
   picks a sub-term keeps the parent field's key, so the attribute key is not a label). On
   sites/KONZ, `NLCD 2006 deciduousForest 3.27 km2 (9.5%)` becomes `area of deciduous forest`.
-  A term given by several AVUs is listed once. The crosswalk's suggested `croissant.keyword`
-  AVUs carry the same names.
+  Further AVUs of a term a subject names are not listed again (unnamed terms: once per value
+  and term, see pass 5). The crosswalk's suggested `croissant.keyword` AVUs carry the same
+  names.
 - **Text keywords are de-duplicated.** With `keyword_style` `text`, a name already listed
   (compared case-insensitively) is left out, keeping the first spelling and the order (KONZ
   listed `Tallgrass prairie` twice).
@@ -129,6 +131,59 @@ crosswalk and the generator derive and in validator warnings.
   and its `url` next to a `termCode`, are dropped with a warning (they were dropped silently,
   against the `from_jsonld` docstring). No key was added: a sub-key of the repeatable
   `croissant.keyword.N` would stay at its old index when a 1.3.0 reader renumbers the keywords.
+
+### Cross-version saves, message caps and smaller fixes (pass 5)
+
+Follow-ups of the verification of passes 1-4. Convention version 1 is unchanged and
+`croissant.*` AVUs written by 1.3.0 parse and export as before (test).
+
+- **1.3.0 exports pin no keywords.** Pass 4 changed the keyword list the crosswalk derives
+  (KONZ: 14 keywords in 1.3.0, 10 now), so `drop_generated` no longer recognised a 1.3.0
+  export of an unchanged folder: apply (merge or replace, either keyword style) stored
+  `croissant.keyword.1-14`, freezing the old duplicated list. Keywords now also count as
+  generated when they give the 1.3.0 list, which the new `core.legacy_keyword_avus(avus)`
+  rebuilds (checked equal to the 1.3.0 crosswalk on KONZ). The other direction cannot be
+  fixed here: a 1.3.1 export saved through a 1.3.0 reader (the live portal, mesa-mcp with
+  1.3.0) stores 10 keyword AVUs. Deploy the portal and mesa-mcp with the same core
+  (convention section 7, README).
+- **Derived `encodingFormat`s are not added.** The generator writes an `encodingFormat` on
+  every entry, so applying an unedited export of a folder written by 1.3.0 added
+  `croissant.distribution.N.encodingFormat` for every entry stored without one
+  (`application/octet-stream`, or a newly mapped type such as `application/toml`).
+  `drop_generated` now leaves out a value equal to the type the generator derives for entry N
+  when the item stores entry N without one (`core.generated_encoding_formats(new, current)`,
+  one warning at `croissant.distribution`). A new entry, or one stored with an
+  `encodingFormat`, keeps the document's value, so applying a document to a new folder
+  stores what it did, and stored values written by `suggest_distribution` stay unchanged.
+  A stored `croissant.file.encodingFormat` equal to the derived type is still removed by
+  `replace` (the document is the same); documented in convention section 5.1.
+- **Message caps in the MCP tools.** `mesa_croissant_validate`, `mesa_croissant_export` and
+  `mesa_croissant_apply` return at most 200 validation errors and warnings, apply warnings
+  and import errors (also in a `croissant_invalid` error's details), with
+  `errors_truncated` / `warnings_truncated` / `import_errors_truncated` counting the rest
+  when something was left out, as the portal's convert does. Validating 5,000 bare fields
+  returned 2.4 MB (now 48 KB through the live server); an accepted 5,000-AVU dry run 3.3 MB
+  (now 0.96 MB, the diff itself, which is not cut). `valid` and `counts` count everything.
+- **Keyword labels.** A subject that names a term by `classificationCode` or `valueURI` and
+  also ends with `(<CURIE>)` gave the name with the suffix; the label now drops a final
+  `(<CURIE>)` or `(<PURL>)` of the term however the subject names it. An `https://` OBO PURL
+  in `valueURI` names the term too. Convention section 7 now says that only a term a
+  subject names is listed once; unnamed ontology AVUs stay one `DefinedTerm` per value and
+  term, as in 1.3.0.
+- **`http://schema.org/` warning.** `validate` warned whenever the context's `sc` / `schema`
+  prefix was `http://schema.org/`, even unused, although mlcroissant 1.1.1 loads such a
+  document. It now expands the terms the document uses (the Dataset `@type`, other `@type`s,
+  keys, `dataType` values) with its `@context` and warns only for those: about the Dataset
+  type ("mlcroissant does not find the Dataset", which mlcroissant confirms) or naming the
+  first other term (mlcroissant loads those documents but does not read the terms).
+- **Vendored copy check.** The module docstring and the README now say that the portal pins
+  the copied file's SHA-256 next to `CORE_VERSION`: the pass-3 copy on the portal branch
+  declared 1.3.1 too, so a version-only check could not catch it.
+- Tests: core (labels, unnamed terms, `legacy_keyword_avus`, `generated_encoding_formats`,
+  1.3.0 AVUs, `http://` terms), plugin (caps in validate / export / apply, 1.3.0 keyword
+  exports in both styles and modes, derived and edited `encodingFormat`s), mlcroissant
+  compat (an unused `http://` prefix loads without a warning; the Dataset type warning
+  matches mlcroissant's refusal).
 
 ## 1.3.0 (2026-11-08)
 

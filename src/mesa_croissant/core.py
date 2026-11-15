@@ -14,7 +14,8 @@ runs in MESA-MCP and in the MESA Portal.
 VENDORED COPY: this file is copied byte-identical into mesa-portal as
 ``portal/services/croissant_core.py``. Do not edit it there. Change it in the
 mesa-croissant repository (``src/mesa_croissant/core.py``), bump
-``CORE_VERSION`` and copy it again; a portal test compares the declared version.
+``CORE_VERSION`` and copy it again; portal tests pin the declared version and the
+file's SHA-256, so a stale copy fails even under the same version.
 
 Public API (see ``docs/DESIGN.md``)::
 
@@ -24,10 +25,12 @@ Public API (see ``docs/DESIGN.md``)::
     parse_avus(avus) -> {"model", "unknown", "warnings"}
     model_to_avus(model) -> [{"attribute", "value", "unit"}]
     crosswalk(avus) -> {"<property>": {"value", "source", "avus"}}
+    legacy_keyword_avus(avus) -> [croissant.keyword AVUs of the 1.3.0 crosswalk]
     to_jsonld(avus, *, item) -> {"document", "sources", "validation"}
     from_jsonld(doc, *, content_base=None, item=None) -> {"avus", "warnings", "errors"}
     validate(doc) -> {"valid", "errors", "warnings", "conformsTo", "summary"}
     encoding_format_for(name) -> str | None
+    generated_encoding_formats(new, current=()) -> [derived encodingFormat AVUs of new]
     duckdb_type_to_croissant(type_name) -> {"dataType", "dataTypes", "isArray", "arrayShape"
                                             [, "subFields"]}
     suggest_distribution(entries, *, lake=None, tables=None) -> [model entries]
@@ -66,10 +69,12 @@ __all__ = [
     "parse_avus",
     "model_to_avus",
     "crosswalk",
+    "legacy_keyword_avus",
     "to_jsonld",
     "from_jsonld",
     "validate",
     "encoding_format_for",
+    "generated_encoding_formats",
     "duckdb_type_to_croissant",
     "suggest_distribution",
     "key_catalog",
@@ -1063,23 +1068,25 @@ def _subject_label(value: str, entry: dict[str, tuple[str, str]], unit: str) -> 
     """The term label a ``datacite.subject.N`` entry gives for the term ``unit``, or None.
 
     The subject names the term when its ``classificationCode`` or ``valueURI`` is the
-    term (its CURIE, IRI or OBO PURL), or when its value ends with ``(<CURIE>)``, as MESA
-    writes ontology subjects (``area of deciduous forest (ENVO:01000816)``); the label is
-    the value without that suffix.
+    term (its CURIE, IRI or OBO PURL, http or https), or when its value ends with
+    ``(<CURIE>)``, as MESA writes ontology subjects (``area of deciduous forest
+    (ENVO:01000816)``). The label is the value without a final ``(<CURIE>)`` (or
+    ``(<IRI>)``) of the term, whichever way the subject names it.
     """
     unit = unit.strip()
     ids = {unit.lower()}
     obo = _obo_iri(unit) if _is_curie(unit) and not _is_url(unit) else None
     if obo:
-        ids.add(obo.lower())
-    for sub in ("classificationCode", "valueURI"):
-        hit = _pick(entry, sub)
-        if hit and hit[0].strip().lower() in ids:
-            return value.strip()
-    suffix = f"({unit})"
+        ids.update({obo.lower(), "https" + obo[4:].lower()})
     text = value.strip()
-    if text.lower().endswith(suffix.lower()):
-        label = text[:-len(suffix)].strip()
+    label = text
+    for ident in ids:
+        if text.lower().endswith(f"({ident})"):
+            label = text[:-len(ident) - 2].strip()
+            break
+    hits = (_pick(entry, sub) for sub in ("classificationCode", "valueURI"))
+    by_code = any(hit and hit[0].strip().lower() in ids for hit in hits)
+    if by_code or label != text:
         return label or None
     return None
 
@@ -1354,6 +1361,30 @@ def crosswalk(avus: Iterable[Any]) -> dict[str, dict[str, Any]]:
     return out
 
 
+def legacy_keyword_avus(avus: Iterable[Any]) -> list[dict[str, str]]:
+    """The ``croissant.keyword`` AVUs the 1.3.0 crosswalk suggested for ``avus``.
+
+    Core 1.3.0 listed every ``datacite.subject`` value, then each ontology AVU as a
+    ``DefinedTerm`` named by its value; 1.3.1 names a term by the subject that names it
+    (convention section 7). Writers that leave out generated keywords accept this list
+    too, so a document a 1.3.0 reader exported for an unchanged item does not pin its
+    keywords. ``[]`` when the item has no subject or ontology AVU.
+    """
+    ix = _AvuIndex(_iter_avus(avus))
+    model: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for _i, entry in ix.family("subject"):
+        hit = _pick(entry, "value", "subject", "")
+        if hit and (hit[0], "") not in seen:
+            seen.add((hit[0], ""))
+            model.append(_leaf(hit[0]))
+    for value, unit, _attr in _ontology_terms(ix):
+        if (value, unit) not in seen:
+            seen.add((value, unit))
+            model.append(_leaf(value, unit))
+    return model_to_avus({"keyword": model}) if model else []
+
+
 # ---------------------------------------------------------------------------
 # Generator: AVUs -> JSON-LD
 # ---------------------------------------------------------------------------
@@ -1617,17 +1648,7 @@ def _distribution_jsonld(entry: Mapping, base: str, warnings: list,
     elif url is not None:
         warnings.append(_msg(path + ".contentUrl", "contentUrl applies to FileObject only"))
     fmt = _lv(entry.get("encodingFormat"))
-    if fmt is None:
-        guess = None
-        if not is_set and url:
-            guess = encoding_format_for(url)
-        elif is_set:
-            for inc in _lvs(entry.get("includes")):
-                guess = encoding_format_for(inc)
-                if guess:
-                    break
-        fmt = guess or _DEFAULT_ENCODING
-    out["encodingFormat"] = fmt
+    out["encodingFormat"] = fmt if fmt is not None else _default_encoding(entry)
     size_leaf = _as_leaf(entry.get("contentSize"))
     if size_leaf and not is_set:
         out["contentSize"] = f"{size_leaf['value']} {size_leaf['unit'] or 'B'}"
@@ -3030,20 +3051,75 @@ def _validate_source(v: _Validator, src: Any, path: str, sources: set[str]) -> N
         sources.add(ref)
 
 
-def _http_schema_org(doc: Mapping) -> bool:
-    """True when the document names schema.org with ``http://`` (its ``@vocab``, the
-    ``sc`` / ``schema`` prefix, or a full-IRI ``@type`` / key of the Dataset node)."""
-    ctx = doc.get("@context")
-    http = ("http://schema.org/", "http://schema.org")
-    for c in _as_list(ctx):
-        if isinstance(c, str) and c in http:
-            return True
-        if isinstance(c, Mapping) and any(
-                isinstance(c.get(k), str) and c[k] in http for k in ("@vocab", "sc", "schema")):
-            return True
-    types = [t for t in _as_list(doc.get("@type")) if isinstance(t, str)]
-    return any(t.startswith(http[0]) for t in types) or \
-        any(isinstance(k, str) and k.startswith(http[0]) for k in doc)
+_HTTP_SCHEMA = "http://schema.org/"
+
+
+def _http_schema_org(doc: Mapping) -> str | None:
+    """Where the document uses a ``http://schema.org/`` term, or None.
+
+    Only terms the document uses count: the ``@type`` values and keys of its nodes, and
+    the values of ``@vocab``-typed terms (``dataType``), expanded with the document's
+    ``@context`` (``@vocab``, prefixes, term definitions). A context prefix nothing uses
+    is not reported, since mlcroissant 1.1.1 loads such a document. Returns ``"@type"``
+    when the Dataset node's own type is a ``http://`` one (mlcroissant then does not find
+    the Dataset), otherwise the JSON-LD path of the first such term."""
+    ctx: dict[str, Any] = {}
+    for c in _as_list(doc.get("@context")):
+        if isinstance(c, str) and c.rstrip("/") + "/" == _HTTP_SCHEMA:
+            ctx["@vocab"] = _HTTP_SCHEMA  # a remote context naming http://schema.org
+        elif isinstance(c, Mapping):
+            ctx.update(c)
+
+    def expand(term: str, hops: int = 0) -> str:
+        if term.startswith("@") or hops > 3:
+            return term
+        defn = ctx.get(term)
+        if isinstance(defn, Mapping):
+            defn = defn.get("@id")
+        if isinstance(defn, str) and defn != term:
+            return expand(defn, hops + 1)
+        prefix, sep, local = term.partition(":")
+        if sep:
+            base = ctx.get(prefix)
+            if isinstance(base, Mapping):
+                base = base.get("@id")
+            if isinstance(base, str) and not local.startswith("//"):
+                return base + local
+            return term
+        vocab = ctx.get("@vocab")
+        return vocab + term if isinstance(vocab, str) else term
+
+    def is_http(term: Any) -> bool:
+        return isinstance(term, str) and expand(term).startswith(_HTTP_SCHEMA)
+
+    vocab_terms = {k for k, d in ctx.items()
+                   if isinstance(d, Mapping) and d.get("@type") == "@vocab"}
+    if any(is_http(t) for t in _as_list(doc.get("@type"))) and not any(
+            isinstance(t, str) and expand(t) == _SCHEMA_ORG + "Dataset"
+            for t in _as_list(doc.get("@type"))):
+        return "@type"
+    stack: list[tuple[Any, str]] = [(doc, "")]
+    while stack:
+        node, path = stack.pop()
+        if isinstance(node, list):
+            stack.extend((x, f"{path}[{i}]") for i, x in reversed(list(enumerate(node))))
+            continue
+        if not isinstance(node, Mapping):
+            continue
+        children = []
+        for key, value in node.items():
+            if key == "@context" or not isinstance(key, str):
+                continue
+            here = f"{path}.{key}" if path else key
+            if key == "@type" and path and any(is_http(t) for t in _as_list(value)):
+                return here  # (the Dataset node's own @type is checked above)
+            if key != "@type" and is_http(key):
+                return here
+            if key in vocab_terms and any(is_http(t) for t in _as_list(value)):
+                return here
+            children.append((value, here))
+        stack.extend(reversed(children))
+    return None
 
 
 def validate(doc: Any) -> dict[str, Any]:
@@ -3090,10 +3166,17 @@ def validate(doc: Any) -> dict[str, Any]:
     elif not isinstance(ctx, Mapping):
         v.warn("@context", "@context should be an object: mlcroissant 1.1.1 refuses any other "
                            "@context (a string or a list)")
-    if _http_schema_org(doc):
-        v.warn("@context", "the document uses http://schema.org/: mlcroissant 1.1.1 does not "
-                           "find the Dataset of such a document (use https://schema.org/; "
-                           "see the README, Validating with mlcroissant)")
+    http_at = _http_schema_org(doc)
+    if http_at == "@type":
+        v.warn("@context", "the document uses http://schema.org/ for its Dataset type: "
+                           "mlcroissant 1.1.1 does not find the Dataset of such a document "
+                           "(use https://schema.org/; see the README, Validating with "
+                           "mlcroissant)")
+    elif http_at:
+        v.warn("@context", f"the document uses http://schema.org/ (at {http_at}): "
+                           "mlcroissant 1.1.1 does not read terms named that way (use "
+                           "https://schema.org/; see the README, Validating with "
+                           "mlcroissant)")
     if "Dataset" not in _types(doc):
         v.err("@type", "@type must be sc:Dataset")
 
@@ -3446,6 +3529,66 @@ _ENCODINGS = {
 #: encodingFormat of a FileObject / FileSet whose name gives no known type: mlcroissant
 #: requires one, and RFC 2046 names this type for arbitrary binary data.
 _DEFAULT_ENCODING = "application/octet-stream"
+
+
+def _default_encoding(entry: Mapping) -> str:
+    """The encodingFormat the generator writes for a model ``distribution`` entry without
+    one: by the extension of a FileObject's contentUrl, or of the first FileSet include
+    with a known type; otherwise ``application/octet-stream``."""
+    is_set = (_lv(entry.get("type")) or "").strip().lower().replace("cr:", "") == "fileset"
+    if not is_set:
+        url = _lv(entry.get("contentUrl"))
+        return (encoding_format_for(url) if url else None) or _DEFAULT_ENCODING
+    for inc in _lvs(entry.get("includes")):
+        guess = encoding_format_for(inc)
+        if guess:
+            return guess
+    return _DEFAULT_ENCODING
+
+
+_DIST_FORMAT_RE = re.compile(r"croissant\.distribution\.([0-9]+)\.encodingFormat")
+
+
+def generated_encoding_formats(new: Iterable[Any],
+                               current: Iterable[Any] = ()) -> list[dict[str, str]]:
+    """The ``croissant.distribution.N.encodingFormat`` AVUs of ``new`` that only repeat
+    what the generator writes without them (convention section 5), for an entry ``N``
+    that ``current`` (the item's AVUs) stores without an ``encodingFormat``.
+
+    A document exported for an item carries an ``encodingFormat`` for every entry, the
+    derived ones included, so applying an unedited export of entries stored without one
+    would add them. Writers leave these out: the item keeps its choice. A new entry, or
+    one the item stores with an ``encodingFormat``, keeps the document's value."""
+    rows = _iter_avus(new)
+    entries_stored: set[int] = set()
+    stored: set[int] = set()
+    for a in _iter_avus(current):
+        parts = a["attribute"].strip().split(".")
+        if (len(parts) >= 4 and parts[:2] == ["croissant", "distribution"]
+                and _INDEX_RE.fullmatch(parts[2])):
+            entries_stored.add(int(parts[2]))
+            if len(parts) == 4 and parts[3] == "encodingFormat":
+                stored.add(int(parts[2]))
+    entries: dict[int, dict[str, Any]] = {}
+    for a in rows:
+        parts = a["attribute"].strip().split(".")
+        if (len(parts) >= 4 and parts[:2] == ["croissant", "distribution"]
+                and _INDEX_RE.fullmatch(parts[2])):
+            entry = entries.setdefault(int(parts[2]), {"includes": []})
+            sub = parts[3]
+            if sub == "includes":
+                entry["includes"].append(_leaf(a["value"]))
+            elif len(parts) == 4 and sub in ("type", "contentUrl"):
+                entry[sub] = _leaf(a["value"])
+    out = []
+    for a in rows:
+        m = _DIST_FORMAT_RE.fullmatch(a["attribute"].strip())
+        if not m or a["unit"] or int(m.group(1)) in stored \
+                or int(m.group(1)) not in entries_stored:
+            continue
+        if a["value"].strip() == _default_encoding(entries.get(int(m.group(1)), {})):
+            out.append(a)
+    return out
 
 
 def encoding_format_for(name: str) -> str | None:

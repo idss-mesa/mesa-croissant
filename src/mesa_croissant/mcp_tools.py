@@ -59,6 +59,10 @@ _AVUS_PER_COLUMN = 4
 #: STRUCT and MAP columns give more AVUs; a result over MAX_AVUS is refused.
 MAX_COLUMNS = (MAX_AVUS - 3) // _AVUS_PER_COLUMN
 
+#: Most messages returned per list (validation errors and warnings, apply warnings and
+#: import errors); the number left out is ``<name>_truncated`` (as the portal's convert).
+MAX_REPORTED = 200
+
 _WS_RE = re.compile(r"\s+")
 #: An index segment, matched with ``fullmatch`` as core does (``$`` would accept a final "\n").
 _INDEX_SEG_RE = core._INDEX_RE
@@ -68,6 +72,23 @@ KeywordStyle = Literal["defined_term", "text"]
 
 def _msg(path: str, message: str) -> dict[str, str]:
     return {"path": path, "message": message}
+
+
+def _capped(out: dict[str, Any], *names: str) -> dict[str, Any]:
+    """``out`` with each named list cut to ``MAX_REPORTED`` and ``<name>_truncated`` set to
+    the number left out (only when something was). Nothing else changes: ``valid`` and the
+    counts still reflect every message."""
+    out = dict(out)
+    for name in names:
+        values = out.get(name) or []
+        if len(values) > MAX_REPORTED:
+            out[name] = values[:MAX_REPORTED]
+            out[f"{name}_truncated"] = len(values) - MAX_REPORTED
+    return out
+
+
+def _capped_report(report: dict[str, Any]) -> dict[str, Any]:
+    return _capped(report, "errors", "warnings")
 
 
 # -- shared schemas --------------------------------------------------------------------------------
@@ -93,13 +114,17 @@ class Summary(BaseModel):
 
 
 class ValidationReport(BaseModel):
-    """:func:`mesa_croissant.core.validate` result."""
+    """:func:`mesa_croissant.core.validate` result. ``errors`` and ``warnings`` hold at most
+    200 messages each; ``errors_truncated`` / ``warnings_truncated`` count the rest (set only
+    when messages were left out; ``valid`` counts them all)."""
 
     valid: bool
     errors: list[Message]
     warnings: list[Message]
     conformsTo: list[str]
     summary: Summary
+    errors_truncated: int | None = None
+    warnings_truncated: int | None = None
 
 
 # -- mesa_croissant_template -----------------------------------------------------------------------
@@ -304,7 +329,7 @@ async def handle_export(
         "path_target_type": target,
         "document": generated["document"],
         "sources": generated["sources"],
-        "validation": generated["validation"],
+        "validation": _capped_report(generated["validation"]),
         "croissant_avu_count": count,
     }
 
@@ -358,11 +383,12 @@ async def handle_validate(
         )
     if args.document is not None:
         report = core.validate(_document_arg(args.document))
-        return {**report, "checked": "document", "path": None, "hint": _MLCROISSANT_HINT}
+        return {**_capped_report(report), "checked": "document", "path": None,
+                "hint": _MLCROISSANT_HINT}
     auth = _require_auth(auth_value, VALIDATE)
     norm, _target, generated, _count = _generate(str(args.path), auth, None,
                                                  args.keyword_style)
-    return {**generated["validation"], "checked": "path", "path": norm,
+    return {**_capped_report(generated["validation"]), "checked": "path", "path": norm,
             "hint": _MLCROISSANT_HINT}
 
 
@@ -462,6 +488,10 @@ class ApplyOutput(BaseModel):
     import_errors: list[Message]
     validation: ValidationReport
     partial_failure: PartialFailure | None = None
+    warnings_truncated: int | None = Field(
+        default=None, description="Warnings left out (each message list holds at most 200).")
+    import_errors_truncated: int | None = Field(
+        default=None, description="Import errors left out (at most 200 are listed).")
 
 
 def _triple(a: dict[str, str]) -> tuple[str, str, str]:
@@ -1053,6 +1083,12 @@ _MSG_DEFAULT_URL = "the default landing page URL is generated, not stored"
 _MSG_DOI_ID = "the DOI URL is taken from the item's datacite.identifier, not stored"
 
 
+def _msg_derived(count: int) -> str:
+    return (f"{count} encodingFormat value(s) equal to the type derived from the file "
+            "extension not stored: the item stores these entries without one, and the "
+            "document still gives it")
+
+
 def _has_stem(attribute: str, stem: str) -> bool:
     return attribute == stem or attribute.startswith(stem + ".")
 
@@ -1070,14 +1106,24 @@ def _same_default(prop: str, others: list[dict[str, str]], subset: list[dict[str
 
     Keywords without units (a document exported with ``keyword_style=text``) also match
     when they give the same plain names: the default keeps the term codes they lost.
+    Keywords also match the list the 1.3.0 crosswalk gave (:func:`core.legacy_keyword_avus`),
+    so a document exported by a 1.3.0 reader for an unchanged item pins nothing.
     """
-    if core.to_jsonld(others + subset, item=item)["document"].get(prop) == default:
+    given = core.to_jsonld(others + subset, item=item)["document"].get(prop)
+    if given == default:
         return True
-    if prop != "keywords" or any(a.get("unit") for a in subset):
+    if prop != "keywords":
+        return False
+    legacy = core.legacy_keyword_avus(others)
+    if legacy and given == core.to_jsonld(others + legacy, item=item)["document"].get(prop):
+        return True
+    if any(a.get("unit") for a in subset):
         return False
     text_item = {**item, "keyword_style": "text"}
-    return (core.to_jsonld(others + subset, item=text_item)["document"].get(prop)
-            == core.to_jsonld(others, item=text_item)["document"].get(prop))
+    given = core.to_jsonld(others + subset, item=text_item)["document"].get(prop)
+    defaults = [others] + ([others + legacy] if legacy else [])
+    return any(given == core.to_jsonld(d, item=text_item)["document"].get(prop)
+               for d in defaults)
 
 
 def drop_generated(
@@ -1095,7 +1141,11 @@ def drop_generated(
       DOI URL, and ``croissant.identifier`` equal to the DOI URL, are always left out;
     * a property whose ``croissant.*`` AVUs generate exactly the value the item gets
       without them (from ``item`` and the non-Croissant AVUs of ``current``) is left out,
-      with a warning naming the source.
+      with a warning naming the source (keywords also when they give the 1.3.0
+      crosswalk's list);
+    * a ``croissant.distribution.N.encodingFormat`` equal to the type the generator
+      derives for that entry is left out when the item stores entry N without one
+      (:func:`core.generated_encoding_formats`).
 
     The same rule as the MESA Portal's ``croissant_service.drop_generated``.
     """
@@ -1121,6 +1171,10 @@ def drop_generated(
     if dropped_id:
         warnings.append(_msg("croissant.identifier", _MSG_DOI_ID))
         stems.append("croissant.identifier")
+    derived = {_triple(a) for a in core.generated_encoding_formats(kept, current)}
+    if derived:
+        kept = [a for a in kept if _triple(a) not in derived]
+        warnings.append(_msg("croissant.distribution", _msg_derived(len(derived))))
 
     base = core.to_jsonld(others, item=item)
     for prop, stem in CROSSWALK_STEMS.items():
@@ -1252,15 +1306,17 @@ async def handle_apply(
         "kept": [],
         "warnings": warnings,
         "import_errors": import_errors,
-        "validation": preview["validation"],
+        "validation": _capped_report(preview["validation"]),
     }
+    result = _capped(result, "warnings", "import_errors")
     if args.dry_run:
         return result
     if import_errors:
         raise ToolError(
             code="croissant_invalid",
             message="The new Croissant AVUs cannot be written; nothing was changed.",
-            details={"errors": import_errors, "warnings": warnings},
+            details=_capped({"errors": import_errors, "warnings": warnings},
+                            "errors", "warnings"),
         )
 
     changes: list[tuple[str, str, str, Literal["add", "delete"]]] = []

@@ -22,7 +22,7 @@ standard in the MESA ecosystem:
 |---|---|---|
 | `mesa_croissant.core` | this repo, `src/mesa_croissant/core.py` | pure-stdlib codec: AVUs ⇄ nested model ⇄ Croissant JSON-LD, MESA crosswalk, validator, encoding-format and DuckDB type maps |
 | `mesa_croissant.mcp_tools` | this repo | MESA-MCP plugin (entry point group `mesa_mcp.tools`, surface `croissant`) |
-| Portal service | `mesa-portal/portal/services/croissant_core.py` | **vendored copy** of `core.py` (byte-identical; a test compares the declared version) |
+| Portal service | `mesa-portal/portal/services/croissant_core.py` | **vendored copy** of `core.py` (byte-identical; tests pin the declared version and the file's SHA-256) |
 | Portal glue | `mesa-portal/portal/services/croissant_service.py`, `portal/views/croissant_views.py`, routes in `portal/urls/viewer_urls.py` | reads AVUs / stat / listing through `DataService`, adds portal URLs |
 | Portal UI | `portal/templates/viewers/metadata.html` (Croissant tab), `data_browser.html` (folder header chip), `viewers/duckdb.html` (record-set export) | |
 | Golden fixtures | `tests/fixtures/*.json` in this repo, copied to the portal's `tests/fixtures/croissant/` | AVU lists with their expected JSON-LD, and upstream documents for import |
@@ -36,7 +36,9 @@ documents `mlcroissant validate --jsonld <file>` for a full check.
 
 Generated documents use `https://schema.org/` (`@vocab` and `sc:`), as every upstream example
 does; mlcroissant 1.1.1 does not find the Dataset of an `http://schema.org/` document. Import
-accepts both. Two mlcroissant 1.1.1 behaviours shape the output
+accepts both. `validate` warns about `http://schema.org/` only where the document uses it
+(the Dataset `@type`, other `@type`s, keys, `dataType` values, expanded with its
+`@context`): an unused context prefix is not reported, since mlcroissant loads that document. Two mlcroissant 1.1.1 behaviours shape the output
 (`tests/test_mlcroissant_compat.py` checks both):
 
 - it rejects `keywords` given as `sc:DefinedTerm` objects, which Croissant 1.1 allows and the
@@ -44,7 +46,7 @@ accepts both. Two mlcroissant 1.1.1 behaviours shape the output
   portal's `&keywords=text`, the MCP export's and path validation's `keyword_style: text`)
   writes plain names instead, each name once (compared case-insensitively). `validate` warns
   about DefinedTerm keywords, and likewise about an `@context` that is not an object and
-  about `http://schema.org/` documents, which mlcroissant also refuses;
+  about `http://schema.org/` terms in use, which mlcroissant also refuses or ignores;
 - it requires `md5` or `sha256` on every FileObject unless `isLiveDataset` is true. A file's
   own FileObject takes the MD5 of the Data Store stat (`item["md5"]`); distribution entries need
   `croissant.distribution.N.md5` / `sha256`. The validator warns when both are missing.
@@ -80,6 +82,9 @@ def model_to_avus(model) -> list[dict]
 def crosswalk(avus) -> dict
     # section 7 defaults: {"<croissant property>": {"value": ..., "source": "datacite.title.1.value",
     #                      "avus": [croissant.* AVUs that would copy it]}}
+def legacy_keyword_avus(avus) -> list[dict]
+    # the croissant.keyword AVUs the 1.3.0 crosswalk gave (every subject, then each ontology AVU
+    # named by its value); writers' drop_generated accepts them as the default too (section 7)
 def to_jsonld(avus, *, item: dict) -> dict
     # item = {"path", "name", "is_folder", "url" (landing page), "content_base" (URL prefix for
     #         relative contentUrl), "size", "md5", "doi", "public" (dav-anon base),
@@ -100,10 +105,14 @@ def validate(doc) -> dict
     # a @graph document is checked on its Dataset node, as from_jsonld reads it (shared code;
     # several Dataset nodes: one error at "@graph" in both); warnings, not errors, for what
     # mlcroissant 1.1.1 refuses: DefinedTerm keywords, a non-object @context, http://schema.org/
+    # terms the document uses (an unused prefix in the @context is not reported)
     # a document nested more than MAX_JSON_DEPTH levels is invalid with one error (no RecursionError);
     # inline data / examples JSON deeper than 64 levels is emitted as text by to_jsonld, with a warning
 def encoding_format_for(name: str) -> str | None   # by extension; None when unknown (the
     # generator then writes application/octet-stream, so every FileObject / FileSet has one)
+def generated_encoding_formats(new, current=()) -> list[dict]
+    # the croissant.distribution.N.encodingFormat AVUs of `new` equal to the type the generator
+    # derives for entry N, for an entry `current` stores without one: writers leave them out
 def duckdb_type_to_croissant(type_name: str) -> dict
     # {"dataType": "cr:Int32", "dataTypes": ["cr:Int32"], "isArray": False, "arrayShape": None}
     # dataTypes is what writers store (GEOMETRY: ["sc:GeoShape", "sc:Text"]); dataType is the one
@@ -137,7 +146,7 @@ URL taken from user input or AVUs.
 |---|---|---|
 | `GET data/croissant/` | `?path=&type=folder\|file` (`&keywords=text` → plain-text keywords; `&download=1` → `application/ld+json` attachment `<name>.croissant.json`) | `{success, document, sources, validation, croissant_avu_count, can_edit, permission, item_type}` |
 | `POST data/croissant/preview/` | `{path, type, avus, keyword_style?}` (the full AVU list the editor would save) | `{success, document, sources, validation}`; no write; limits: ≤5,000 AVUs, body ≤1 MB |
-| `POST data/croissant/convert/` | `{jsonld, path?, type?, avus?}` (jsonld: an object or a string, body ≤1 MB; `avus`: the editor's list, ≤5,000, whose non-Croissant AVUs feed the crosswalk) | `{success, avus, avu_count, warnings, errors, validation}` (each list ≤200, `<name>_truncated` counts the rest); no write. With `path`: contentUrls below the item's folder come back as relative paths, a file's own FileObject becomes `croissant.file.*` (`from_jsonld` item mode), and generated values are left out (`drop_generated`: the default url or DOI URL, the DOI identifier, crosswalk-equal properties). More AVUs than one save carries: `avus: []` and the document is not validated |
+| `POST data/croissant/convert/` | `{jsonld, path?, type?, avus?}` (jsonld: an object or a string, body ≤1 MB; `avus`: the editor's list, ≤5,000, whose non-Croissant AVUs feed the crosswalk) | `{success, avus, avu_count, warnings, errors, validation}` (each list ≤200, `<name>_truncated` counts the rest); no write. With `path`: contentUrls below the item's folder come back as relative paths, a file's own FileObject becomes `croissant.file.*` (`from_jsonld` item mode), and generated values are left out (`drop_generated`: the default url or DOI URL, the DOI identifier, crosswalk-equal properties (keywords also when equal to the 1.3.0 crosswalk list), and derived distribution `encodingFormat`s of entries the editor's list stores without one). More AVUs than one save carries: `avus: []` and the document is not validated |
 | `GET data/croissant/suggest/` | `?path=` (folder) | `{success, distribution: [...model entries], lake: {alias, root} \| null, truncated}`; from one directory listing (≤500 entries, recursing at most into a `data/` child), plus section-8 lake suggestions |
 
 Errors: `{success: false, error, code}` with the metadata views' codes:
@@ -225,8 +234,8 @@ Registered through the `mesa_mcp.tools` entry point with `meta={"io.mesa/surface
 |---|---|---|
 | `mesa_croissant_template` | `{level: dataset\|rai\|geo\|file\|distribution\|recordset\|all}` | `key_catalog` (attribute, cardinality, required, unit, description) plus convention/core versions and notes; no I/O |
 | `mesa_croissant_export` | `{path, url?, keyword_style: defined_term\|text}` | reads the item's AVUs and stat (file size, MD5 checksum) → `to_jsonld` → `{path, path_target_type, document, sources, validation, croissant_avu_count}` |
-| `mesa_croissant_validate` | `{document}` or `{path, keyword_style: defined_term\|text}` | `validate` report plus `{checked, path, hint}` (the hint names `mlcroissant validate` and `keyword_style`); a `path` is validated on the document `mesa_croissant_export` generates with the same `keyword_style` (default `defined_term`), which is ignored with a `document` |
-| `mesa_croissant_apply` | `{path, document? \| avus?, mode: merge\|replace, drop_unknown=false, dry_run=true, content_base?}` | the new set (below) → AVU diff against the item's `croissant.*` AVUs → `{diff: {add, remove, unchanged}, counts, written, errors, kept, warnings, import_errors, validation, partial_failure?}` (`validation`: the document the item would generate); unless `dry_run`, writes (adds first, removes by the exact stored triple) and mirrors one snapshot to the DuckLake AVU history (`record_avu_changes`, source `mesa-mcp:mesa_croissant_apply`) |
+| `mesa_croissant_validate` | `{document}` or `{path, keyword_style: defined_term\|text}` | `validate` report (each message list ≤200, `errors_truncated` / `warnings_truncated` count the rest; `valid` counts them all) plus `{checked, path, hint}` (the hint names `mlcroissant validate` and `keyword_style`); a `path` is validated on the document `mesa_croissant_export` generates with the same `keyword_style` (default `defined_term`), which is ignored with a `document` |
+| `mesa_croissant_apply` | `{path, document? \| avus?, mode: merge\|replace, drop_unknown=false, dry_run=true, content_base?}` | the new set (below) → AVU diff against the item's `croissant.*` AVUs → `{diff: {add, remove, unchanged}, counts, written, errors, kept, warnings, import_errors, validation, partial_failure?}` (`validation`: the document the item would generate; `warnings`, `import_errors` and the validation lists ≤200 each, plus `<name>_truncated`); unless `dry_run`, writes (adds first, removes by the exact stored triple) and mirrors one snapshot to the DuckLake AVU history (`record_avu_changes`, source `mesa-mcp:mesa_croissant_apply`) |
 | `mesa_croissant_from_schema` | `{columns: [{name, type}], record_set_id, source_id, record_set_index=1, record_set_name?, description?}` | record-set AVUs from a DuckDB/Arrow schema (section 9); STRUCT members get `transformJsonPath` = the member name (`$['…']` when it is not a plain identifier, as the DuckDB viewer writes it; the rule is in AVU_CONVENTION.md section 6, `transformJsonPath`), except a member that is itself a STRUCT, typed `sc:Text` without one; writes nothing. Details below |
 
 `mesa_croissant_from_schema` in detail:
@@ -281,8 +290,14 @@ Registered through the `mesa_mcp.tools` entry point with `meta={"io.mesa/surface
   URL (the DOI comes from the item's `datacite.identifier`), and any crosswalk property
   (name, description, license, creator, publisher, datePublished, version, keywords,
   temporalCoverage, spatialCoverage, `prov:wasGeneratedBy`, url, identifier) whose imported
-  AVUs generate exactly the value the item's non-Croissant AVUs (or its name) give. Each drop
-  is a warning naming the source. The imported AVUs go through the same key checks;
+  AVUs generate exactly the value the item's non-Croissant AVUs (or its name) give; keywords
+  also when they give the list the 1.3.0 crosswalk derived (`core.legacy_keyword_avus`), so
+  a 1.3.0 reader's export of an unchanged item pins nothing. Each drop is a warning naming
+  the source. A `croissant.distribution.N.encodingFormat` equal to the type the generator
+  derives for entry N is left out when the item stores entry N without one
+  (`core.generated_encoding_formats`; one warning at `croissant.distribution`), so an
+  unedited export of entries written without one adds nothing; a new entry, or one stored
+  with an `encodingFormat`, keeps the document's value. The imported AVUs go through the same key checks;
   `from_jsonld` writes canonical keys, so a document never trips them (a test imports every
   golden, upstream and import fixture).
 - **Size and depth.** More than 5,000 AVUs in the new set is refused with `invalid_argument`
@@ -292,7 +307,12 @@ Registered through the `mesa_mcp.tools` entry point with `meta={"io.mesa/surface
   (`_clip_refused`). A `document` (object or JSON text) nested more than
   `core.MAX_JSON_DEPTH` (100) levels is refused with `invalid_argument` before anything walks
   it, and so is `mesa_croissant_validate`'s (Python's JSON parser raises RecursionError at
-  about 1,000 levels).
+  about 1,000 levels). Messages are capped like the portal's convert: `validate`, `export`
+  and `apply` return at most `MAX_REPORTED` (200) validation errors and warnings, apply
+  warnings and import errors (also in a `croissant_invalid` error's details), each with
+  `<name>_truncated` counting the rest when something was left out. An accepted
+  5,000-AVU dry run of bare fields returned 10,005 validation errors (3.3 MB); the diff
+  itself is not cut.
 - **merge** works per canonical path (`croissant.license` = `croissant.license.1`) and per
   entity: a path of the new set replaces its current values; an entity the new set gives a
   property of (`creator.N`, `distribution.N`, `recordSet.N`, `...field.M`, `...subField.K`)

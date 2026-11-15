@@ -151,6 +151,8 @@ class TestModule:
             "duckdb_type_to_croissant",
             "suggest_distribution",
             "is_croissant_attr",
+            "legacy_keyword_avus",
+            "generated_encoding_formats",
             "CONTEXT",
         ):
             assert getattr(mesa_croissant, name) is getattr(core, name)
@@ -3691,3 +3693,144 @@ class TestDeferredFindings:
             ("croissant.url", doc["url"], ""),
             ("croissant.distribution.1.encodingFormat", "text/csv", "")}
         assert set(triples(avus)) <= set(triples(back["avus"]))
+
+
+class TestPass5:
+    """Follow-ups of the 1.3.1 verification (pass 5)."""
+
+    # keyword names
+    def test_a_subject_matched_by_code_loses_its_curie_suffix(self):
+        term = A("envo.area_of_deciduous_forest", "NLCD forest 9%", "ENVO:01000816")
+        for sub, ident in (
+                ("classificationCode", "ENVO:01000816"),
+                ("valueURI", "http://purl.obolibrary.org/obo/ENVO_01000816"),
+                ("valueURI", "https://purl.obolibrary.org/obo/ENVO_01000816")):
+            for value in ("area of deciduous forest (ENVO:01000816)",
+                          "area of deciduous forest (http://purl.obolibrary.org/obo/"
+                          "ENVO_01000816)",
+                          "area of deciduous forest"):
+                avus = [A("datacite.subject.1.value", value),
+                        A(f"datacite.subject.1.{sub}", ident), term]
+                kw = crosswalk(avus)["keywords"]
+                assert kw["value"] == [DT("area of deciduous forest", "ENVO:01000816")], \
+                    (sub, ident, value)
+                assert kw["avus"] == [A("croissant.keyword.1", "area of deciduous forest",
+                                        "ENVO:01000816")]
+        text = to_jsonld([A("datacite.subject.1.value", "x (ENVO:01000816)"),
+                          A("datacite.subject.1.classificationCode", "ENVO:01000816"), term],
+                         item=dict(FOLDER, keyword_style="text"))["document"]["keywords"]
+        assert text == ["x"]
+        # a subject that is only the suffix does not name the term
+        avus = [A("datacite.subject.1.value", "(ENVO:01000816)"),
+                A("datacite.subject.1.classificationCode", "ENVO:01000816"), term]
+        assert crosswalk(avus)["keywords"]["value"] == [
+            "(ENVO:01000816)", DT("NLCD forest 9%", "ENVO:01000816")]
+
+    def test_unnamed_terms_are_listed_once_per_value_and_term(self):
+        """Only a term a subject names is listed once (under its label); other ontology
+        AVUs keep one DefinedTerm per (value, term), as 1.3.0 listed them."""
+        avus = [A("envo.biome", "Tallgrass prairie", "ENVO:01000193"),
+                A("envo.biome_note", "tallgrass, KS", "ENVO:01000193"),
+                A("envo.biome_again", "Tallgrass prairie", "ENVO:01000193")]
+        assert crosswalk(avus)["keywords"]["value"] == [
+            DT("Tallgrass prairie", "ENVO:01000193"), DT("tallgrass, KS", "ENVO:01000193")]
+        named = [A("datacite.subject.1.value", "temperate grassland biome (ENVO:01000193)")]
+        assert crosswalk(named + avus)["keywords"]["value"] == [
+            DT("temperate grassland biome", "ENVO:01000193")]
+
+    def test_legacy_keyword_avus_are_the_1_3_0_crosswalk(self):
+        avus = [A("datacite.subject.1.value", "NEON"),
+                A("datacite.subject.2.value", "temperate grassland biome (ENVO:01000193)"),
+                A("datacite.subject.3.value", "NEON"),
+                A("envo.biome", "Tallgrass prairie", "ENVO:01000193"),
+                A("envo.biome2", "Tallgrass prairie", "ENVO:01000193"),
+                A("croissant.keyword.1", "ignored")]
+        assert core.legacy_keyword_avus(avus) == [
+            A("croissant.keyword.1", "NEON"),
+            A("croissant.keyword.2", "temperate grassland biome (ENVO:01000193)"),
+            A("croissant.keyword.3", "Tallgrass prairie", "ENVO:01000193")]
+        assert crosswalk(avus)["keywords"]["avus"] == [
+            A("croissant.keyword.1", "NEON"),
+            A("croissant.keyword.2", "temperate grassland biome", "ENVO:01000193")]
+        assert core.legacy_keyword_avus([A("datacite.title.1.value", "t")]) == []
+
+    # derived encoding formats
+    def test_generated_encoding_formats(self):
+        current = [A("croissant.distribution.1.id", "a"),
+                   A("croissant.distribution.2.id", "b"),
+                   A("croissant.distribution.2.encodingFormat", "text/csv"),
+                   A("croissant.distribution.3.id", "s")]
+        new = [A("croissant.distribution.1.id", "a"),
+               A("croissant.distribution.1.contentUrl", "pyproject.toml"),
+               A("croissant.distribution.1.encodingFormat", "application/toml"),
+               A("croissant.distribution.2.id", "b"),
+               A("croissant.distribution.2.contentUrl", "b.csv"),
+               A("croissant.distribution.2.encodingFormat", "text/csv"),  # stored: kept
+               A("croissant.distribution.3.id", "s"),
+               A("croissant.distribution.3.type", "FileSet"),
+               A("croissant.distribution.3.includes.1", "*.weird"),
+               A("croissant.distribution.3.includes.2", "*.parquet"),
+               A("croissant.distribution.3.encodingFormat", "application/x-parquet"),
+               A("croissant.distribution.4.id", "new"),  # not stored yet: kept
+               A("croissant.distribution.4.contentUrl", "new.xyz"),
+               A("croissant.distribution.4.encodingFormat", "application/octet-stream")]
+        assert core.generated_encoding_formats(new, current) == [
+            A("croissant.distribution.1.encodingFormat", "application/toml"),
+            A("croissant.distribution.3.encodingFormat", "application/x-parquet")]
+        # a value other than the derived one is an edit
+        edited = [dict(a, value="text/plain") if a["attribute"].endswith("1.encodingFormat")
+                  else a for a in new]
+        assert core.generated_encoding_formats(edited, current) == [
+            A("croissant.distribution.3.encodingFormat", "application/x-parquet")]
+        assert core.generated_encoding_formats(new) == []
+        # leaving them out does not change the document
+        derived = core.generated_encoding_formats(new, current)
+        rest = [a for a in new if a not in derived]
+        assert gen(MINIMAL[:5] + rest)["document"]["distribution"] == \
+            gen(MINIMAL[:5] + new)["document"]["distribution"]
+
+    def test_1_3_0_avus_still_parse_and_export_unchanged_with_pass_5(self):
+        """Pass 5 changes only crosswalk names, writer helpers and a validator warning:
+        croissant.* AVUs give the same document and round trip as before."""
+        avus = MINIMAL + [
+            A("croissant.keyword.1", "area of deciduous forest (ENVO:01000816)"),
+            A("croissant.keyword.2", "NLCD forest 9%", "ENVO:01000816"),
+            A("croissant.distribution.2.id", "notes"),
+            A("croissant.distribution.2.contentUrl", "notes.xyz")]
+        out = gen(avus + [A("datacite.subject.1.value", "other"),
+                          A("envo.forest", "f", "ENVO:01000816")])
+        assert out["document"]["keywords"] == [
+            "area of deciduous forest (ENVO:01000816)", DT("NLCD forest 9%", "ENVO:01000816")]
+        assert out["sources"]["keywords"] == "croissant"
+        assert out["document"]["distribution"][1]["encodingFormat"] == \
+            "application/octet-stream"
+        back = from_jsonld(out["document"], content_base=core._content_base(FOLDER))
+        assert set(triples(avus)) <= set(triples(back["avus"]))
+        assert parse_avus(avus)["warnings"] == []
+        assert sorted(triples(model_to_avus(parse_avus(avus)["model"]))) == \
+            sorted(triples(avus))
+
+    # http://schema.org
+    def test_http_schema_org_only_counts_terms_the_document_uses(self):
+        def warning(doc):
+            return [w["message"] for w in validate(doc)["warnings"]
+                    if "http://schema.org/" in w["message"]]
+
+        base = valid_doc()
+        unused = dict(base, **{"@context": dict(core.CONTEXT, schema="http://schema.org/")})
+        assert validate(unused)["valid"] is True and warning(unused) == []
+        used_key = dict(unused, **{"schema:citation": "x"})
+        assert warning(used_key) and "at schema:citation" in warning(used_key)[0]
+        used_type = dict(unused, **{"@type": "schema:Dataset"})
+        assert "for its Dataset type" in warning(used_type)[0]
+        vocab = dict(base, **{"@context": dict(core.CONTEXT, **{"@vocab": "http://schema.org/"})})
+        assert warning(vocab) and "for its Dataset type" not in warning(vocab)[0]
+        nested = dict(base, **{"@context": dict(core.CONTEXT, sc="http://schema.org/"),
+                               "@type": "Dataset"})
+        assert "creator" in warning(nested)[0]
+        full = dict(base, **{"http://schema.org/citation": "x"})
+        assert warning(full)
+        mentioned = dict(base, description="see http://schema.org/Dataset")
+        assert warning(mentioned) == []
+        remote = dict(base, **{"@context": "http://schema.org"})
+        assert warning(remote)

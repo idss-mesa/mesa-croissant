@@ -1717,3 +1717,168 @@ def _ids(cols: list[dict[str, str]]) -> list[tuple[str, str]]:
 ])
 def test_from_schema_real_names_keep_their_default_ids(cols, expected) -> None:
     assert _ids(cols) == expected
+
+
+# -- 1.3.1 pass 5: message caps, 1.3.0 exports, derived encoding formats -----------------------
+
+
+def _bare_fields_doc(count: int) -> dict[str, Any]:
+    doc = copy.deepcopy(GOLDEN["document"])
+    doc["recordSet"] = [{"@type": "cr:RecordSet", "@id": "t", "name": "t",
+                         "field": [{"@type": "cr:Field", "name": f"f{i}"}
+                                   for i in range(count)]}]
+    return doc
+
+
+def test_validate_caps_each_message_list() -> None:
+    """A large document no longer returns every message (2.4 MB for 5,000 bare fields):
+    each list holds MAX_REPORTED, the rest is counted, and valid still counts them all."""
+    full = core.validate(_bare_fields_doc(500))
+    assert len(full["errors"]) > mt.MAX_REPORTED
+    res = run(mt.handle_validate(mt.ValidateInput(document=_bare_fields_doc(500))))
+    mt.ValidateOutput.model_validate(res)
+    assert res["valid"] is False
+    assert res["errors"] == full["errors"][:mt.MAX_REPORTED]
+    assert res["errors_truncated"] == len(full["errors"]) - mt.MAX_REPORTED
+    assert "warnings_truncated" not in res  # only set when something was left out
+    small = run(mt.handle_validate(mt.ValidateInput(document=GOLDEN["document"])))
+    assert "errors_truncated" not in small and small["valid"] is True
+    big = run(mt.handle_validate(mt.ValidateInput(document=_bare_fields_doc(5000))))
+    assert len(json.dumps(big)) < 100_000
+
+
+def test_export_caps_the_validation_lists(irods) -> None:
+    irods(core.model_to_avus({"recordSet": [{"id": core._leaf("t"), "field": [
+        {"name": core._leaf(f"f{i}")} for i in range(300)]}]}))
+    res = run(mt.handle_export(mt.ExportInput(path=FOLDER), auth_value=AUTH))
+    mt.ExportOutput.model_validate(res)
+    assert len(res["validation"]["errors"]) == mt.MAX_REPORTED
+    assert res["validation"]["errors_truncated"] > 0
+
+
+def test_apply_caps_validation_warnings_and_import_errors(irods) -> None:
+    irods([])
+    fields = [avu("croissant.recordSet.1.id", "t")] + [
+        avu(f"croissant.recordSet.1.field.{i}.name", f"f{i}") for i in range(1, 501)]
+    unknown = [avu(f"croissant.zz{i}", "x") for i in range(300)]
+    zeros = [avu(f"croissant.creator.0{i}.name", "x") for i in range(1, 301)]
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=fields + unknown + zeros),
+                              auth_value=AUTH))
+    mt.ApplyOutput.model_validate(res)
+    assert res["counts"]["new"] == 1101  # the diff itself is not cut
+    assert len(res["diff"]["add"]) == 1101
+    for name in ("warnings", "import_errors"):
+        assert len(res[name]) == mt.MAX_REPORTED, name
+        assert res[f"{name}_truncated"] > 0, name
+    assert len(res["validation"]["errors"]) == mt.MAX_REPORTED
+    assert res["validation"]["errors_truncated"] > 0
+    with pytest.raises(ToolError) as exc:
+        run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=fields + zeros, dry_run=False),
+                            auth_value=AUTH))
+    assert exc.value.code == "croissant_invalid"
+    assert len(exc.value.details["errors"]) == mt.MAX_REPORTED
+    assert exc.value.details["errors_truncated"] > 0
+
+
+# A KONZ-like folder: subjects that name two ontology terms, and the terms' AVUs.
+ONTOLOGY_FOLDER = [
+    avu("datacite.subject.1.value", "NEON"),
+    avu("datacite.subject.2.value", "Tallgrass prairie"),
+    avu("datacite.subject.3.value", "temperate grassland biome (ENVO:01000193)"),
+    avu("datacite.subject.4.value", "area of deciduous forest (ENVO:01000816)"),
+    avu("envo.temperate_grassland_biome", "Tallgrass prairie", "ENVO:01000193"),
+    avu("envo.area_of_deciduous_forest", "NLCD 2006 deciduousForest 3.27 km2 (9.5%)",
+        "ENVO:01000816"),
+]
+# What core 1.3.0 exported for it (checked against the 1.3.0 core), in both keyword styles.
+KEYWORDS_1_3_0 = [
+    "NEON", "Tallgrass prairie", "temperate grassland biome (ENVO:01000193)",
+    "area of deciduous forest (ENVO:01000816)",
+    {"@type": "sc:DefinedTerm", "name": "Tallgrass prairie", "termCode": "ENVO:01000193"},
+    {"@type": "sc:DefinedTerm", "name": "NLCD 2006 deciduousForest 3.27 km2 (9.5%)",
+     "termCode": "ENVO:01000816"},
+]
+KEYWORDS_1_3_0_TEXT = [k["name"] if isinstance(k, dict) else k for k in KEYWORDS_1_3_0]
+
+
+@pytest.mark.parametrize("keywords", [KEYWORDS_1_3_0, KEYWORDS_1_3_0_TEXT])
+@pytest.mark.parametrize("mode", ["merge", "replace"])
+def test_apply_a_1_3_0_export_pins_no_keywords(irods, keywords, mode) -> None:
+    """1.3.1 names a term by the subject that names it (10 keywords on KONZ, 14 before);
+    an unchanged folder's 1.3.0 export must still be recognised as the generated list."""
+    irods(ONTOLOGY_FOLDER)
+    doc = {**GOLDEN["document"], "keywords": keywords}
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, document=doc, mode=mode),
+                              auth_value=AUTH))
+    assert not any(a["attribute"].startswith("croissant.keyword") for a in res["diff"]["add"])
+    assert any(w["path"] == "croissant.keyword" and "not stored" in w["message"]
+               for w in res["warnings"])
+    # The 1.3.1 export of the same folder is the default too.
+    now = run(mt.handle_export(mt.ExportInput(path=FOLDER), auth_value=AUTH))["document"]
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, document={
+        **GOLDEN["document"], "keywords": now["keywords"]}, mode=mode), auth_value=AUTH))
+    assert not any(a["attribute"].startswith("croissant.keyword") for a in res["diff"]["add"])
+    # An edited list is stored.
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, document={
+        **GOLDEN["document"], "keywords": keywords[1:]}, mode=mode), auth_value=AUTH))
+    assert avu("croissant.keyword.1", "Tallgrass prairie") in res["diff"]["add"]
+
+
+def test_drop_generated_accepts_the_1_3_0_keyword_avus() -> None:
+    item = {"path": FOLDER, "name": "demo", "is_folder": True}
+    legacy = core.legacy_keyword_avus(ONTOLOGY_FOLDER)
+    assert len(legacy) == 6
+    kept, warnings, stems = mt.drop_generated(legacy, item, ONTOLOGY_FOLDER)
+    assert kept == [] and stems == ["croissant.keyword"]
+    kept, _w, stems = mt.drop_generated(legacy[:-1], item, ONTOLOGY_FOLDER)
+    assert kept == legacy[:-1] and stems == []
+
+
+# A dataset folder as 1.3.0 wrote it: distribution entries without encodingFormat.
+FOLDER_1_3_0 = [
+    avu("croissant.distribution.1.id", "pyproject.toml"),
+    avu("croissant.distribution.1.contentUrl", "pyproject.toml"),
+    avu("croissant.distribution.2.id", "notes"),
+    avu("croissant.distribution.2.contentUrl", "notes.xyz"),
+    avu("croissant.distribution.3.id", "weird"),
+    avu("croissant.distribution.3.type", "FileSet"),
+    avu("croissant.distribution.3.includes.1", "*.weird"),
+    avu("croissant.distribution.4.id", "ratings.csv"),
+    avu("croissant.distribution.4.contentUrl", "ratings.csv"),
+    avu("croissant.distribution.4.encodingFormat", "text/csv"),
+]
+
+
+@pytest.mark.parametrize("mode", ["merge", "replace"])
+def test_apply_an_unedited_export_adds_no_derived_encoding_format(irods, mode) -> None:
+    """The generator writes an encodingFormat for every entry (application/octet-stream when
+    the extension is unknown); applying the export back must not store the derived ones for
+    entries the folder keeps without one, nor drop the one it stores."""
+    irods(FOLDER_1_3_0)
+    doc = run(mt.handle_export(mt.ExportInput(path=FOLDER), auth_value=AUTH))["document"]
+    assert [d["encodingFormat"] for d in doc["distribution"]] == [
+        "application/toml", "application/octet-stream", "application/octet-stream",
+        "text/csv"]
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, document=doc, mode=mode),
+                              auth_value=AUTH))
+    touched = res["diff"]["add"] + res["diff"]["remove"]
+    assert not any(a["attribute"].endswith(".encodingFormat") for a in touched), touched
+    assert avu("croissant.distribution.4.encodingFormat", "text/csv") in res["diff"]["unchanged"]
+    assert any(w["path"] == "croissant.distribution" and w["message"].startswith("3 ")
+               for w in res["warnings"])
+    after = core.to_jsonld(res["diff"]["unchanged"] + res["diff"]["add"],
+                           item={"path": FOLDER, "name": "demo"})["document"]
+    assert after["distribution"] == doc["distribution"]
+
+
+def test_apply_keeps_the_encoding_format_of_a_new_or_changed_entry(irods) -> None:
+    irods([])  # a new folder: the document's values are stored as given
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, document=GOLDEN["document"]),
+                              auth_value=AUTH))
+    assert triples(res["diff"]["add"]) == triples(GOLDEN["avus"])
+    irods(FOLDER_1_3_0)
+    doc = run(mt.handle_export(mt.ExportInput(path=FOLDER), auth_value=AUTH))["document"]
+    doc["distribution"][1]["encodingFormat"] = "text/plain"  # an edit: stored
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, document=doc), auth_value=AUTH))
+    assert [a for a in res["diff"]["add"] if a["attribute"].endswith(".encodingFormat")] == [
+        avu("croissant.distribution.2.encodingFormat", "text/plain")]

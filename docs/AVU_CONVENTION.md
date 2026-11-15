@@ -197,7 +197,7 @@ On the dataset folder: `croissant.distribution.N.<sub>`.
 | `name` | both | defaults to `id` |
 | `description` | both | |
 | `contentUrl` | FileObject | absolute URL, or a path relative to the dataset root (`data/x.csv`), written as the plain path (`my dir/a b.csv`, not percent-encoded) |
-| `encodingFormat` | both | MIME type (`text/csv`, `application/x-parquet`, `image/tiff`). When absent the generator takes the type of the `contentUrl` extension (a FileSet: of its first `includes` with a known extension), else `application/octet-stream`: mlcroissant requires an `encodingFormat` on every FileObject and FileSet |
+| `encodingFormat` | both | MIME type (`text/csv`, `application/x-parquet`, `image/tiff`). When absent the generator takes the type of the `contentUrl` extension (a FileSet: of its first `includes` with a known extension), else `application/octet-stream`: mlcroissant requires an `encodingFormat` on every FileObject and FileSet. A writer importing a document leaves out an `encodingFormat` equal to that derived type for an entry `N` the item stores without one (so applying an unedited export adds nothing); a new entry, or one stored with an `encodingFormat`, keeps the document's value (`generated_encoding_formats`) |
 | `contentSize` | FileObject | number of bytes; unit optional (default `B`) |
 | `sha256` / `md5` | FileObject | hex digests |
 | `containedIn.M` | both | `id`s of the FileObject(s)/FileSet(s) containing this one |
@@ -226,6 +226,9 @@ when they differ from the file name / the format of its extension (`application/
 for an extension without a known type) / the stat MD5. `@id`,
 `contentUrl` and `contentSize` are generated and not stored; a field `source` naming the file
 is left out (fields default to it). Every other distribution entry is reported and dropped.
+So `replace` with an unedited export removes a stored `croissant.file.encodingFormat` that
+equals the derived type (1.3.0 stored `application/octet-stream` for an unknown extension);
+the generated document stays the same.
 
 ## 6. Record sets and fields (`cr:RecordSet`, `cr:Field`)
 
@@ -280,10 +283,18 @@ never copy these automatically; an editor may offer "copy into Croissant".
 | `datePublished` | `datacite.publicationYear`, `datacite.date.N` with `dateType=Issued`, `dc.date` |
 | `version` | `datacite.version` |
 | `identifier`, `url` | `datacite.identifier` with `identifierType=DOI` → `https://doi.org/<doi>` |
-| `keywords` | `datacite.subject.N.value` in index order, then ontology AVUs (`<ontology>.<key>` whose unit is a CURIE) as `DefinedTerm`s (`termCode` = the unit). The term's `name` is its label when a subject names the term: its `classificationCode` or `valueURI` is the CURIE (or its OBO PURL `http://purl.obolibrary.org/obo/<PREFIX>_<id>`), or its value ends with `(<CURIE>)`, as in `area of deciduous forest (ENVO:01000816)` (label: the value without that suffix). That `DefinedTerm` then takes the subject's place in the list, so the term is not listed twice. Without such a subject the `name` is the AVU value, which may be free text: the attribute key is not used, since an editor that picks a sub-term keeps the parent field's key (`envo.biome` with a sub-term's label and CURIE). A term given by several AVUs is listed once |
+| `keywords` | `datacite.subject.N.value` in index order, then ontology AVUs (`<ontology>.<key>` whose unit is a CURIE) as `DefinedTerm`s (`termCode` = the unit). The term's `name` is its label when a subject names the term: its `classificationCode` or `valueURI` is the CURIE (or its OBO PURL `http(s)://purl.obolibrary.org/obo/<PREFIX>_<id>`), or its value ends with `(<CURIE>)`, as in `area of deciduous forest (ENVO:01000816)`. The label is the subject's value without a final `(<CURIE>)` (or `(<PURL>)`) of the term, however the subject names it. That `DefinedTerm` then takes the subject's place in the list, so the term is not listed twice, and further AVUs of a term a subject names are not listed again. Without such a subject the `name` is the AVU value, which may be free text: the attribute key is not used, since an editor that picks a sub-term keeps the parent field's key (`envo.biome` with a sub-term's label and CURIE). Such unnamed terms are listed once per value and term: two AVUs with the same CURIE and different values give two `DefinedTerm`s |
 | `temporalCoverage` | `neon.temporalCoverage`, `datacite.date.N` with `dateType=Collected` |
 | `spatialCoverage` | `datacite.geoLocation.N.box` (`S,W,N,E` → `S W N E`), `datacite.geoLocation.N.point`, `datacite.geoLocation.N.place`; else the flat (legacy) `datacite.geoLocationBox`, `datacite.geoLocationPoint`, `datacite.geoLocationPlace` (the indexed keys take precedence) |
 | `prov:wasGeneratedBy` | `mesa.generated_by` (a URL becomes `{"@id": …}`) |
+
+Writers that import a document (`mesa_croissant_apply`, the portal's convert) leave out a
+property whose `croissant.*` AVUs give exactly the crosswalk value, so a later DataCite edit
+still reaches the document. Core 1.3.0 derived `keywords` differently (every subject, then
+each ontology AVU as a `DefinedTerm` named by its value); writers also accept that list
+(`legacy_keyword_avus`), so a document a 1.3.0 reader exported for an unchanged item pins no
+keywords. A 1.3.0 writer cannot know the 1.3.1 list: a 1.3.1 export saved through a 1.3.0
+reader stores `croissant.keyword.N`. Deploy the portal and mesa-mcp with the same core.
 
 ## 8. MESA DuckLake projects
 

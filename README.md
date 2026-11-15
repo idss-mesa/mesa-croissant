@@ -68,7 +68,10 @@ How `mesa_croissant_apply` behaves:
 - **Dry run.** `dry_run` is true by default. More than 5,000 AVUs, or a document nested more
   than 100 levels deep, is refused with `invalid_argument` in a dry run too. In the diff, a
   value over 2,700 characters (or a unit over 250), which is always an import error, is shown
-  clipped to its first 200 characters and its length.
+  clipped to its first 200 characters and its length. Warnings, import errors and the
+  validation's errors and warnings are capped at 200 each (as the portal's convert), with
+  `<name>_truncated` counting the rest; `mesa_croissant_validate` and `mesa_croissant_export`
+  cap their validation lists the same way.
 - **Write order.** Adds are written before removes. If an add fails, the old value of that
   path is kept. If the new set has import errors (non-`croissant.*` attributes, empty
   values, values over 2,700 characters, non-canonical keys), the tool writes nothing and
@@ -82,9 +85,14 @@ How `mesa_croissant_apply` behaves:
   makes: the default landing page or the DOI URL as `url`, the DOI URL as `identifier`, the
   item name, and whatever the crosswalk takes from `datacite.*`, `dc.*` or ontology AVUs.
   Apply leaves those out, with a warning naming the source, so a later DataCite edit or DOI
-  still reaches the document. The rule (`drop_generated`) is the one the portal's JSON-LD
-  import applies, so both importers store the same AVUs. In `merge` mode the item's current
-  pinned value of such a property is removed too.
+  still reaches the document. Keywords are also left out when they give the list core 1.3.0
+  derived, so a document exported by a 1.3.0 reader for an unchanged item pins nothing (a
+  1.3.1 export saved through a 1.3.0 reader does store its keywords: deploy the portal and
+  mesa-mcp with the same core). A distribution `encodingFormat` equal to the type derived
+  from the extension is left out for an entry the item stores without one. The rule
+  (`drop_generated`) is the one the portal's JSON-LD import applies, so both importers store
+  the same AVUs. In `merge` mode the item's current pinned value of such a property is
+  removed too.
 - **Unknown keys and duplicates.** Unknown `croissant.*` keys and index-0 entries are kept
   by both modes (unless `replace` with `drop_unknown=true`), except below an entity the diff
   removes; a document cannot carry them.
@@ -135,14 +143,17 @@ and `UNIT_MAX` are imported from `mesa_croissant.core`.
 The portal does not depend on this package. Instead, `src/mesa_croissant/core.py` is copied
 **byte-identical** to `mesa-portal/portal/services/croissant_core.py`, and the golden fixtures
 are copied to `mesa-portal/tests/fixtures/croissant/`. The portal's
-`tests/test_croissant_core.py` pins `EXPECTED_CORE_VERSION` and runs the same golden cases.
+`tests/test_croissant_core.py` pins `EXPECTED_CORE_VERSION` and `EXPECTED_CORE_SHA256` (the
+SHA-256 of the copied file, so a missed copy fails even when both declare the same version)
+and runs the same golden cases.
 
 To change the codec:
 
 1. Edit `core.py` here (never the portal copy), add or adjust the tests and fixtures, and bump
    `CORE_VERSION`. A change to the AVU layout also needs a convention version bump (see
    [CONTRIBUTING.md](CONTRIBUTING.md)).
-2. Copy `core.py` and `tests/fixtures/` into the portal and update `EXPECTED_CORE_VERSION`.
+2. Copy `core.py` and `tests/fixtures/` into the portal and update `EXPECTED_CORE_VERSION`
+   and `EXPECTED_CORE_SHA256` (`sha256sum src/mesa_croissant/core.py`).
 3. Run the portal's Croissant tests. `cmp src/mesa_croissant/core.py
    ../mesa-portal/portal/services/croissant_core.py` must report no difference.
 
@@ -235,8 +246,10 @@ Known mlcroissant 1.1.1 differences (see `tests/test_mlcroissant_compat.py`):
   DuckLake table. `suggest_distribution` writes `<table>/*.parquet` and
   `<table>/**/*.parquet`; a file matching both is read once.
 - **schema.org.** Documents use `https://schema.org/`, as every upstream example does.
-  mlcroissant 1.1.1 does not find the Dataset in a document that uses `http://`. Import
-  accepts both; `core.validate` warns about `http://`.
+  mlcroissant 1.1.1 does not find the Dataset in a document whose Dataset type uses
+  `http://`, and does not read other terms named that way. Import accepts both;
+  `core.validate` warns where the document uses `http://schema.org/` (not about an unused
+  prefix in the `@context`, which mlcroissant loads).
 - **`@context`.** mlcroissant requires an object; a string or list `@context` (valid
   JSON-LD) is refused. `core.validate` warns.
 - **`@graph`.** A document whose top level is a `@graph` holding one Dataset node loads in
