@@ -878,6 +878,47 @@ def _key(a: dict[str, str]) -> tuple[str, str, str]:
     return (a["attribute"].strip(), a["value"].strip(), (a.get("unit") or "").strip())
 
 
+def _implied_defaults(new: list[dict[str, str]]) -> dict[str, str]:
+    """Values the codec derives for keys the new set leaves out, by canonical path.
+
+    A ``distribution`` or ``recordSet`` entry's ``name`` defaults to its ``id``, and a
+    field's (or subField's) ``id`` defaults to ``<parent id>/<name>`` (convention section 6).
+    A document import leaves such a value out, so a stored copy of it says nothing the new
+    set does not: :func:`compute_diff` keeps it rather than removing it.
+    """
+    vals: dict[str, str] = {}
+    owners: set[str] = set()
+    for a in new:
+        info = _canon(a["attribute"].strip())
+        if info is None or not info.owner:
+            continue
+        owners.add(info.owner)
+        vals.setdefault(info.path, a["value"].strip())
+
+    def is_field(owner: str) -> bool:
+        return owner.split(".")[-2] in ("field", "subField")
+
+    def eff_id(owner: str, depth: int = 0) -> str | None:
+        explicit = vals.get(owner + ".id")
+        if explicit or not is_field(owner) or depth > core.MAX_JSON_DEPTH:
+            return explicit or None
+        parent = eff_id(owner.rsplit(".", 2)[0], depth + 1)
+        name = vals.get(owner + ".name")
+        return f"{parent}/{name}" if parent and name else None
+
+    out: dict[str, str] = {}
+    for owner in owners:
+        parts = owner.split(".")
+        if len(parts) == 3 and parts[1] in ("distribution", "recordSet"):
+            if owner + ".name" not in vals and vals.get(owner + ".id"):
+                out[owner + ".name"] = vals[owner + ".id"]
+        elif parts[1] == "recordSet" and is_field(owner) and owner + ".id" not in vals:
+            fid = eff_id(owner)
+            if fid:
+                out[owner + ".id"] = fid
+    return out
+
+
 def compute_diff(
     current: list[dict[str, str]], new: list[dict[str, str]], mode: str,
     drop_unknown: bool = False,
@@ -906,6 +947,11 @@ def compute_diff(
     keys and index-0 entries (convention rule 7: editors keep them; a document cannot carry
     them), unless ``drop_unknown``. An unknown attribute the new set gives is replaced.
 
+    In both modes a current value the codec would derive anyway for a key the new set
+    leaves out (:func:`_implied_defaults`: an entry name equal to its id, a field id equal to
+    ``<parent id>/<name>``) is unchanged, not removed: a document import never carries such a
+    default, so without this re-applying an unedited export would remove it.
+
     In both modes an unknown key (or index-0 entry) belongs to the deepest entity its
     attribute reaches (:func:`_entity_chain`, as the codec binds it). When the diff removes
     that entity, or one above it, because of its known keys, the unknown key is removed with
@@ -926,6 +972,18 @@ def compute_diff(
         if k in new_keys and k not in claimed and i not in claimed.values():
             claimed[k] = i
     matched = set(claimed.values())
+
+    # A stored value equal to the default the codec derives for a key the new set leaves
+    # out (a name equal to the id, a field id equal to <parent id>/<name>) stays: the
+    # document is the same with or without it, so re-applying an export is a no-op.
+    implied = _implied_defaults(new)
+    defaulted: set[str] = set()
+    for i, c in enumerate(cur):
+        info = _canon(c["attribute"].strip())
+        if (i not in matched and info is not None and info.path in implied
+                and info.path not in defaulted and c["value"].strip() == implied[info.path]):
+            matched.add(i)
+            defaulted.add(info.path)
 
     keep: list[dict[str, str]] = []
     remove: list[dict[str, str]] = []
@@ -1608,8 +1666,9 @@ async def handle_from_schema(args: FromSchemaInput) -> dict[str, Any]:
     _assign_ids(fields, rs_id)
 
     rs: dict[str, Any] = {"id": rs_id}
-    if args.record_set_name and args.record_set_name.strip():
-        rs["name"] = args.record_set_name.strip()
+    if args.record_set_name and args.record_set_name.strip() \
+            and args.record_set_name.strip() != rs_id:
+        rs["name"] = args.record_set_name.strip()  # a name equal to the id is the default
     if args.description and args.description.strip():
         rs["description"] = args.description.strip()
     rs["field"] = fields

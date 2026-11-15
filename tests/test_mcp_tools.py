@@ -1882,3 +1882,88 @@ def test_apply_keeps_the_encoding_format_of_a_new_or_changed_entry(irods) -> Non
     res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, document=doc), auth_value=AUTH))
     assert [a for a in res["diff"]["add"] if a["attribute"].endswith(".encodingFormat")] == [
         avu("croissant.distribution.2.encodingFormat", "text/plain")]
+
+
+# -- stored defaults (name == id, field id == <parent id>/<name>) ------------------------
+
+DEFAULTED_CURRENT = [
+    avu("croissant.name", "D"),
+    avu("croissant.distribution.1.id", "s.csv"),
+    avu("croissant.distribution.1.name", "s.csv"),
+    avu("croissant.distribution.1.contentUrl", "s.csv"),
+    avu("croissant.distribution.1.encodingFormat", "text/csv"),
+    avu("croissant.recordSet.1.id", "stations"),
+    avu("croissant.recordSet.1.name", "stations"),
+    avu("croissant.recordSet.1.field.1.name", "site"),
+    avu("croissant.recordSet.1.field.1.id", "stations/site"),
+    avu("croissant.recordSet.1.field.1.dataType", "sc:Text"),
+    avu("croissant.recordSet.1.field.2.name", "loc"),
+    avu("croissant.recordSet.1.field.2.subField.1.name", "lat"),
+    avu("croissant.recordSet.1.field.2.subField.1.id", "stations/loc/lat"),
+]
+
+
+@pytest.mark.parametrize("mode", ["merge", "replace"])
+def test_apply_reapplying_an_export_keeps_stored_defaults(irods, mode) -> None:
+    """The write test's step D: an unedited export applied back is a no-op even when the
+    item stores values the codec derives anyway (the import leaves them out)."""
+    fake = irods(DEFAULTED_CURRENT)
+    exp = run(mt.handle_export(mt.ExportInput(path=FOLDER), auth_value=AUTH))
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, document=exp["document"], mode=mode,
+                                            dry_run=False), auth_value=AUTH))
+    assert res["diff"]["add"] == [] and res["diff"]["remove"] == []
+    assert triples(fake.avus) == triples(DEFAULTED_CURRENT)
+
+
+def test_compute_diff_keeps_a_stored_default_only_while_it_is_the_default() -> None:
+    new = [avu("croissant.recordSet.1.id", "renamed"),
+           avu("croissant.recordSet.1.field.1.name", "site"),
+           avu("croissant.distribution.1.id", "s.csv")]
+    current = [avu("croissant.recordSet.1.id", "stations"),
+               avu("croissant.recordSet.1.name", "stations"),
+               avu("croissant.recordSet.1.field.1.name", "site"),
+               avu("croissant.recordSet.1.field.1.id", "stations/site"),
+               avu("croissant.distribution.1.id", "s.csv"),
+               avu("croissant.distribution.1.name", "s.csv")]
+    add, remove, keep, _ = mt.compute_diff(current, new, "merge")
+    # The record set's id changed, so its stored name and the field's id are no longer the
+    # defaults and go; the distribution's name still equals its id and stays.
+    assert triples(remove) == {("croissant.recordSet.1.id", "stations", ""),
+                               ("croissant.recordSet.1.name", "stations", ""),
+                               ("croissant.recordSet.1.field.1.id", "stations/site", "")}
+    assert ("croissant.distribution.1.name", "s.csv", "") in triples(keep)
+    assert triples(add) == {("croissant.recordSet.1.id", "renamed", "")}
+
+
+def test_compute_diff_a_new_explicit_value_still_replaces_a_stored_default() -> None:
+    current = [avu("croissant.recordSet.1.id", "t"), avu("croissant.recordSet.1.name", "t")]
+    new = [avu("croissant.recordSet.1.id", "t"), avu("croissant.recordSet.1.name", "Stations")]
+    add, remove, _keep, _ = mt.compute_diff(current, new, "merge")
+    assert triples(remove) == {("croissant.recordSet.1.name", "t", "")}
+    assert triples(add) == {("croissant.recordSet.1.name", "Stations", "")}
+
+
+def test_implied_defaults() -> None:
+    new = [avu("croissant.recordSet.1.id", "t"),
+           avu("croissant.recordSet.1.field.1.name", "a"),
+           avu("croissant.recordSet.1.field.2.name", "b"),
+           avu("croissant.recordSet.1.field.2.id", "t/custom"),
+           avu("croissant.recordSet.1.field.2.subField.1.name", "x"),
+           avu("croissant.distribution.1.id", "d"),
+           avu("croissant.distribution.1.name", "Named"),
+           avu("croissant.creator.1.name", "Alice")]
+    assert mt._implied_defaults(new) == {
+        "croissant.recordSet.1.name": "t",
+        "croissant.recordSet.1.field.1.id": "t/a",
+        "croissant.recordSet.1.field.2.subField.1.id": "t/custom/x",
+    }
+
+
+def test_from_schema_leaves_out_a_record_set_name_equal_to_its_id() -> None:
+    cols = [{"name": "a", "type": "INTEGER"}]
+    same = run(mt.handle_from_schema(mt.FromSchemaInput(
+        columns=cols, record_set_id="t", source_id="s", record_set_name=" t ")))
+    assert "croissant.recordSet.1.name" not in {a["attribute"] for a in same["avus"]}
+    other = run(mt.handle_from_schema(mt.FromSchemaInput(
+        columns=cols, record_set_id="t", source_id="s", record_set_name="Stations")))
+    assert ("croissant.recordSet.1.name", "Stations", "") in triples(other["avus"])

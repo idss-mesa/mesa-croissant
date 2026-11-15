@@ -44,7 +44,9 @@ How `mesa_croissant_apply` behaves:
   (`recordSet.1.field.3` when the new `recordSet.1` has an id and fields 1-2). Any other
   `croissant.*` AVU stays, and a warning names kept entries of lists the new set gives and
   kept nested entries of a replaced entity. To change one property of an entity, give the
-  whole entity (from `mesa_croissant_export`) and check the dry run. `replace` makes the item's `croissant.*` AVUs the
+  whole entity (from `mesa_croissant_export`) and check the dry run. A stored value that is
+  only the default (a name equal to the id, a field id equal to `<parent id>/<name>`)
+  stays when the new set leaves the key out, so an unedited export applies back as a no-op. `replace` makes the item's `croissant.*` AVUs the
   new set plus the current unknown `croissant.*` keys and index-0 entries (convention rule 7;
   a document cannot carry them), unless `drop_unknown=true`. In both modes an unknown key
   (or index-0 entry) below an entity the diff removes goes with it (rule 7), so no entity of

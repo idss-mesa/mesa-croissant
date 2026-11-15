@@ -322,6 +322,11 @@ Registered through the `mesa_mcp.tools` entry point with `meta={"io.mesa/surface
   pinned `croissant.*` value, so the result matches the document.
 - **replace** makes the item's `croissant.*` AVUs the new set plus the current unknown
   `croissant.*` keys and index-0 entries (convention rule 7), unless `drop_unknown`.
+- In both modes a current value the codec derives anyway for a key the new set leaves out
+  (`_implied_defaults`: an entry `name` equal to its `id` for `distribution` / `recordSet`,
+  a field or subField `id` equal to `<parent id>/<name>`) stays unchanged while it is still
+  that default. A document import never carries such a value, so without this, re-applying
+  an unedited export would remove it. The write test found this (step D).
 - In both modes an unknown key (or index-0 entry) belongs to the deepest entity its attribute
   reaches, as the codec binds it (`_entity_chain`, checked against `core._place`); when the
   diff removes that entity, or one above it, because of its known keys, the key is removed

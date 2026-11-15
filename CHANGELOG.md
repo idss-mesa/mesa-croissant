@@ -185,6 +185,24 @@ Follow-ups of the verification of passes 1-4. Convention version 1 is unchanged 
   compat (an unused `http://` prefix loads without a warning; the Dataset type warning
   matches mlcroissant's refusal).
 
+### Re-applying an export is a no-op (authenticated write test)
+
+- **`mesa_croissant_apply` keeps stored defaults.** The authenticated write test against a
+  real home folder passed 49 of 50 checks; the failure was step D. Applying the folder's
+  own unedited export back (merge) planned to remove `croissant.recordSet.1.name =
+  stations`. `from_schema` had stored the name because it equalled the record set id, and
+  a document import leaves out a name equal to the id (convention: "name (defaults to
+  id)"). Merge then replaced the entry as a whole. `compute_diff` now keeps a stored value
+  the codec derives anyway for a key the new set leaves out: an entry `name` equal to its
+  `id` (`distribution`, `recordSet`), or a field or subField `id` equal to
+  `<parent id>/<name>`. This works in both modes and also covers folders written by 1.3.0.
+  The value is kept only while it is still the default. A changed id removes it, and an
+  explicit new value replaces it.
+- **`mesa_croissant_from_schema`** no longer stores a `record_set_name` equal to
+  `record_set_id`.
+- Tests: re-applying an export (merge and replace) with stored defaults, defaults that stop
+  being defaults, `_implied_defaults`, and the `from_schema` name.
+
 ## 1.3.0 (2026-11-08)
 
 - `croissant.*` AVU convention version 1, the pure-stdlib core (codec, generator, crosswalk,
