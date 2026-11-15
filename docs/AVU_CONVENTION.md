@@ -60,7 +60,12 @@ are converted to their 1.1 forms).
    read as `croissant.license.1`). `mesa_croissant_apply` refuses a new set that breaks the
    writer rule (index 0, `01`, `007`, `-1`, an empty segment such as `croissant..name`, or a
    gap such as `keyword.1` with `keyword.3`), with an error naming the attributes; AVUs
-   already stored are read as above.
+   already stored are read as above. Gaps are judged on what the item holds after the write:
+   with `replace` that is the new set, with `merge` the new set plus the stored entries that
+   stay. So a merge may give `creator.2` or `recordSet.2` alone when the item already has
+   index 1; it is refused when it would leave a gap (a new index after a missing one, or an
+   entry the merge removes before a new one). An entry already stored after an old gap may
+   still be edited.
 6. **One value per path.** Two AVUs with the same attribute are an error for scalar paths
    (and for the same index of a repeatable property, `croissant.license` next to
    `croissant.license.1` included); readers use the first in AVU order and report a
@@ -233,7 +238,7 @@ is left out (fields default to it). Every other distribution entry is reported a
 | Sub-key | Notes |
 |---|---|
 | `name` | **required** |
-| `id` | defaults to `<recordSet id>/<name>`; unique in the dataset. Writers give an explicit `id` when the default contains whitespace: the default with each run of whitespace replaced by `_` (`mesa_croissant_from_schema` adds `-2`, `-3`, ... when that id is another field's default or already taken, so `a b` next to a column `a_b` gets `<recordSet id>/a_b-2`) |
+| `id` | defaults to `<recordSet id>/<name>`; unique in the dataset. Writers give an explicit `id` when the default contains whitespace: the default with each run of whitespace replaced by `_` (`mesa_croissant_from_schema` adds `-2`, `-3`, ... when that id is another field's default or already taken, so `a b` next to a column `a_b` gets `<recordSet id>/a_b-2`; a name used as given keeps its default, a trimmed or whitespace name yields to it) |
 | `description` | |
 | `dataType` / `dataType.K` | one or several types: `sc:Text`, `sc:Integer`, `sc:Float`, `sc:Boolean`, `sc:Date`, `sc:DateTime`, `sc:Time`, `sc:URL`, `sc:ImageObject`, `sc:GeoShape`, `sc:GeoCoordinates`, `cr:Int8…cr:Int64`, `cr:UInt8…cr:UInt64`, `cr:Float16/32/64`, `cr:BoundingBox`, `cr:Label`, `cr:Split`, `cr:SegmentationMask`, or any CURIE/IRI. The `sc:`/`cr:` prefix is optional on read. mlcroissant 1.1.1 reads a field's values with the first of its types it knows: `sc:Boolean`, `sc:Date`, `sc:DateTime`, `sc:Float`, `sc:Integer`, `sc:Text`, `sc:Time`, `sc:URL`, `cr:Int*`, `cr:UInt*`, `cr:Float*`, `sc:ImageObject`, `sc:AudioObject`, `sc:VideoObject`, `cr:BoundingBox`. A semantic type it does not read (`sc:GeoShape`, `sc:GeoCoordinates`, `sc:Number`, `sc:Enumeration`, `cr:Label`, `cr:Split`, `cr:SegmentationMask`, other CURIEs) should be given next to one it reads, e.g. `dataType.1 = sc:GeoShape`, `dataType.2 = sc:Text`; a field with none of them (and no subFields, and no field as its source) gets a validator warning, not an error |
 | `source` | `id` of a distribution entry (FileObject or FileSet) or of another record set. With a record set and a `column` naming one of its fields the source is emitted as that field; a bare record-set source is valid Croissant 1.1 but mlcroissant 1.1 cannot load it (the validator warns) |

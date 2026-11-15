@@ -55,14 +55,20 @@ How `mesa_croissant_apply` behaves:
   `2`, ... without leading zeros, signs or gaps, no empty segment, and one value per
   single-valued path or index. `croissant.license.01`, `croissant.creator.0.name`,
   `croissant.keyword.1` with `croissant.keyword.3`, or `croissant.name` twice are import
-  errors naming the attributes. Unknown `croissant.*` keys are accepted with a warning.
+  errors naming the attributes. Unknown `croissant.*` keys are accepted with a warning. In
+  `merge` mode gaps are checked on the result (the new set plus the stored entries that
+  stay), so a partial set such as `creator.2` alone, a new `keyword.3`, or record set 2 from
+  `mesa_croissant_from_schema(record_set_index=2)` is accepted when the item has the entries
+  before it.
 - **Whitespace.** New attributes, values and units are written trimmed of leading and
   trailing whitespace (mesa-mcp's iRODS helper strips every triple), with a warning naming
   each trimmed attribute; line breaks inside a value are kept (convention rule 3). Values
   are compared the same way, so a stored value that differs only by surrounding whitespace
   is unchanged. Removes use the exact stored triple.
 - **Dry run.** `dry_run` is true by default. More than 5,000 AVUs, or a document nested more
-  than 100 levels deep, is refused with `invalid_argument` in a dry run too.
+  than 100 levels deep, is refused with `invalid_argument` in a dry run too. In the diff, a
+  value over 2,700 characters (or a unit over 250), which is always an import error, is shown
+  clipped to its first 200 characters and its length.
 - **Write order.** Adds are written before removes. If an add fails, the old value of that
   path is kept. If the new set has import errors (non-`croissant.*` attributes, empty
   values, values over 2,700 characters, non-canonical keys), the tool writes nothing and

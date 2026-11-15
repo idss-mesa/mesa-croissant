@@ -1459,3 +1459,209 @@ def test_template_required_flags_and_datatype_forms() -> None:
     fs = run(mt.handle_from_schema(mt.FromSchemaInput(
         columns=[{"name": "a", "type": "INTEGER"}], record_set_id="t", source_id="s")))
     assert "croissant.recordSet.1.field.1.dataType" in {a["attribute"] for a in fs["avus"]}
+
+
+# -- 1.3.1 (pass 3): merge checks gaps on the result, refused values clipped, real ids --------
+
+#: A dataset with two creators, two keywords, one license and record set 1 with fields 1-3.
+_LAKE = [
+    avu("croissant.name", "N"), avu("croissant.description", "D"),
+    avu("croissant.license.1", "https://x.org/l"), avu("croissant.datePublished", "2026"),
+    avu("croissant.creator.1.name", "A"), avu("croissant.creator.2.name", "B"),
+    avu("croissant.keyword.1", "k1"), avu("croissant.keyword.2", "k2"),
+    avu("croissant.distribution.1.id", "s"), avu("croissant.distribution.1.type", "FileSet"),
+    avu("croissant.distribution.1.encodingFormat", "text/csv"),
+    avu("croissant.distribution.1.includes.1", "*.csv"),
+    avu("croissant.recordSet.1.id", "t1"),
+] + [x for m in (1, 2, 3) for x in (
+    avu(f"croissant.recordSet.1.field.{m}.name", f"f{m}"),
+    avu(f"croissant.recordSet.1.field.{m}.dataType", "sc:Text"),
+    avu(f"croissant.recordSet.1.field.{m}.source", "s"),
+    avu(f"croissant.recordSet.1.field.{m}.column", f"f{m}"))]
+
+
+@pytest.mark.parametrize("new", [
+    [avu("croissant.creator.2.name", "Bee")],
+    [avu("croissant.recordSet.2.id", "t2"), avu("croissant.recordSet.2.field.1.name", "g"),
+     avu("croissant.recordSet.2.field.1.dataType", "sc:Text"),
+     avu("croissant.recordSet.2.field.1.source", "s"),
+     avu("croissant.recordSet.2.field.1.column", "g")],
+    [avu("croissant.keyword.3", "k3")],
+    [avu("croissant.recordSet.1.field.3.name", "f3"),
+     avu("croissant.recordSet.1.field.3.description", "third"),
+     avu("croissant.recordSet.1.field.3.dataType", "sc:Text"),
+     avu("croissant.recordSet.1.field.3.source", "s"),
+     avu("croissant.recordSet.1.field.3.column", "f3")],
+    [avu("croissant.recordSet.1.field.4.name", "f4"),
+     avu("croissant.recordSet.1.field.4.dataType", "sc:Text"),
+     avu("croissant.recordSet.1.field.4.source", "s")],
+    [avu("croissant.license.2", "https://y.org/l")],
+], ids=["creator-2", "record-set-2", "keyword-3", "field-3", "field-4", "license-2"])
+def test_apply_merge_accepts_partial_updates(irods, new) -> None:
+    """Regression of pass 2: merge refused every update starting at index 2 or higher as a
+    gap, though the result has none (1.3.0 accepted them)."""
+    fake = irods(_LAKE)
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=new), auth_value=AUTH))
+    assert res["import_errors"] == [] and res["validation"]["valid"] is True
+    out = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=new, dry_run=False),
+                              auth_value=AUTH))
+    assert res["counts"]["add"] >= 1
+    assert out["written"]["added"] == res["counts"]["add"] == len(fake.added)
+
+
+def test_apply_merge_takes_from_schema_record_set_2(irods) -> None:
+    """The documented DuckLake workflow: one from_schema + one merge apply per table."""
+    fake = irods(_LAKE)
+    fs = run(mt.handle_from_schema(mt.FromSchemaInput(
+        columns=[{"name": "siteID", "type": "VARCHAR"}, {"name": "n", "type": "INTEGER"}],
+        record_set_id="plots", source_id="s", record_set_index=2)))
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=fs["avus"], dry_run=False),
+                              auth_value=AUTH))
+    assert res["import_errors"] == [] and len(fake.added) == len(fs["avus"])
+    exp = run(mt.handle_export(mt.ExportInput(path=FOLDER), auth_value=AUTH))
+    assert [r["@id"] for r in exp["document"]["recordSet"]] == ["t1", "plots"]
+
+
+@pytest.mark.parametrize(("current", "new", "path", "gap"), [
+    # The item lacks the entries before the new one: the result has the gap.
+    ([], [avu("croissant.recordSet.2.id", "t2")], "croissant.recordSet", 1),
+    ([avu("croissant.keyword.1", "a")], [avu("croissant.keyword.3", "c")],
+     "croissant.keyword", 2),
+    # merge replaces recordSet.1 (the new set gives its id): fields 1-2 go, field 3 stays new.
+    (_LAKE, [avu("croissant.recordSet.1.id", "t1"),
+             avu("croissant.recordSet.1.field.3.name", "f3")],
+     "croissant.recordSet.1.field", 1),
+    # A new index after a gap the item already has.
+    ([avu("croissant.keyword.1", "a"), avu("croissant.keyword.3", "c")],
+     [avu("croissant.keyword.4", "d")], "croissant.keyword", 2),
+])
+def test_apply_merge_refuses_a_gap_in_the_result(irods, current, new, path, gap) -> None:
+    fake = irods(current)
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=new), auth_value=AUTH))
+    hit = [e for e in res["import_errors"] if e["path"] == path]
+    assert hit and f"gap at {gap} of the result" in hit[0]["message"], res["import_errors"]
+    with pytest.raises(ToolError) as exc:
+        run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=new, dry_run=False),
+                            auth_value=AUTH))
+    assert exc.value.code == "croissant_invalid" and fake.added == []
+
+
+def test_apply_replace_checks_gaps_on_the_new_set_alone(irods) -> None:
+    irods(_LAKE)
+    res = run(mt.handle_apply(mt.ApplyInput(
+        path=FOLDER, avus=[avu("croissant.creator.2.name", "Bee")], mode="replace"),
+        auth_value=AUTH))
+    assert [e["path"] for e in res["import_errors"]] == ["croissant.creator"]
+    assert "of the result" not in res["import_errors"][0]["message"]
+
+
+def test_apply_merge_with_1_3_0_avus_and_partial_sets(irods) -> None:
+    """Backward compatibility: AVUs 1.3.0 accepted (a gap, leading zeros) stay usable. An
+    entry after a gap the item already has can be edited; 01 counts as index 1 the way
+    readers read it; the other checks still look at the new set only."""
+    stored = [avu("croissant.license.01", "https://old.org/l"),
+              avu("croissant.keyword.1", "a"), avu("croissant.keyword.3", "c"),
+              avu("croissant.creator.01.name", "A")]
+    irods(stored)
+    for new in ([avu("croissant.keyword.3", "see")],
+                [avu("croissant.license.2", "https://two.org/l")],
+                [avu("croissant.creator.2.name", "B")]):
+        res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, avus=new), auth_value=AUTH))
+        assert res["import_errors"] == [], (new, res["import_errors"])
+    exp = run(mt.handle_export(mt.ExportInput(path=FOLDER), auth_value=AUTH))
+    assert exp["document"]["keywords"] == ["a", "c"]
+    # Canonical keys stay required in the new set.
+    res = run(mt.handle_apply(mt.ApplyInput(
+        path=FOLDER, avus=[avu("croissant.keyword.02", "b")]), auth_value=AUTH))
+    assert [e["path"] for e in res["import_errors"]] == ["croissant.keyword.02"]
+
+
+def test_key_errors_gap_check_is_bounded() -> None:
+    """An index can be any number: the check never walks up to it."""
+    errs, bad = mt._key_errors([avu("croissant.keyword.999999999999", "x")],
+                               before=[], after=[])
+    assert "gap at 1" in errs[0]["message"] and bad == {"croissant.keyword.999999999999"}
+    errs, _ = mt._key_errors([avu("croissant.keyword.999999999999", "x")],
+                             before=["croissant.keyword.999999999999"],
+                             after=[])
+    assert errs == []  # an entry the item has, after a gap it already has
+
+
+@pytest.mark.parametrize("via", ["avus", "document"])
+def test_apply_refused_dry_run_clips_over_limit_values(irods, via) -> None:
+    """A refused value is not echoed whole (live: a 1,200,000-character description made a
+    2.4 MB dry run); the import error keeps its length."""
+    irods([])
+    long = "x" * 1_200_000
+    if via == "avus":
+        arg = {"avus": [avu("croissant.name", "N"), avu("croissant.description", long),
+                        avu("croissant.keyword.1", "k", "u" * 300)]}
+    else:
+        doc = copy.deepcopy(GOLDEN["document"])
+        doc["description"] = long
+        arg = {"document": doc}
+    res = run(mt.handle_apply(mt.ApplyInput(path=FOLDER, **arg), auth_value=AUTH))
+    assert any("1200000 characters" in e["message"] for e in res["import_errors"])
+    add = {a["attribute"]: a for a in res["diff"]["add"]}
+    desc = add["croissant.description"]["value"]
+    assert len(desc) < 300 and desc.startswith("x" * mt._CLIP_SHOWN)
+    assert "clipped: 1200000 characters" in desc
+    assert len(json.dumps(res)) < 50_000
+    if via == "avus":
+        assert add["croissant.name"]["value"] == "N"
+        assert "clipped: 300 characters" in add["croissant.keyword.1"]["unit"]
+
+
+def test_apply_does_not_clip_values_within_the_limits(irods) -> None:
+    irods([])
+    value = "y" * core.VALUE_MAX
+    res = run(mt.handle_apply(mt.ApplyInput(
+        path=FOLDER, avus=[avu("croissant.description", value, "u" * core.UNIT_MAX)]),
+        auth_value=AUTH))
+    assert res["import_errors"] == []
+    assert res["diff"]["add"] == [avu("croissant.description", value, "u" * core.UNIT_MAX)]
+
+
+def _ids(cols: list[dict[str, str]]) -> list[tuple[str, str]]:
+    res = run(mt.handle_from_schema(mt.FromSchemaInput(
+        columns=cols, record_set_id="t", source_id="s")))
+    out = core.to_jsonld([avu("croissant.distribution.1.id", "s"),
+                          avu("croissant.distribution.1.type", "FileObject")] + res["avus"],
+                         item={"path": FOLDER, "name": "demo"})
+    pairs: list[tuple[str, str]] = []
+
+    def walk(fs: list[dict[str, Any]]) -> None:
+        for f in fs:
+            pairs.append((f["name"], f["@id"]))
+            walk(f.get("subField", []))
+
+    walk(out["document"]["recordSet"][0]["field"])
+    assert len({i for _, i in pairs}) == len(pairs), pairs
+    assert not any(k.startswith("_") for a in res["avus"] for k in a), res["avus"]
+    assert not any("._" in a["attribute"] for a in res["avus"])
+    return pairs
+
+
+@pytest.mark.parametrize(("cols", "expected"), [
+    # A renamed STRUCT's real member keeps <new id>/<name>; the whitespace member yields.
+    ([{"name": "s t", "type": 'STRUCT("x y" INTEGER, x_y INTEGER)'},
+      {"name": "s_t", "type": "INTEGER"}],
+     [("s t", "t/s_t-2"), ("x y", "t/s_t-2/x_y-2"), ("x_y", "t/s_t-2/x_y"), ("s_t", "t/s_t")]),
+    # A trimmed name is not real: the exact column keeps t/a.
+    ([{"name": "a ", "type": "INTEGER"}, {"name": "a", "type": "INTEGER"}],
+     [("a", "t/a-2"), ("a", "t/a")]),
+    # A real column name with '/' equal to a member's path keeps it.
+    ([{"name": "s t", "type": "STRUCT(a INTEGER)"}, {"name": "s_t/a", "type": "INTEGER"}],
+     [("s t", "t/s_t"), ("a", "t/s_t/a-2"), ("s_t/a", "t/s_t/a")]),
+    # Unchanged from pass 2.
+    ([{"name": "a", "type": "INTEGER"}, {"name": "a-2", "type": "INTEGER"},
+      {"name": "a ", "type": "INTEGER"}],
+     [("a", "t/a"), ("a-2", "t/a-2"), ("a", "t/a-3")]),
+    ([{"name": "s", "type": 'STRUCT("x y" INTEGER, x_y INTEGER)'}],
+     [("s", "t/s"), ("x y", "t/s/x_y-2"), ("x_y", "t/s/x_y")]),
+    # Two real fields with one default: the first in order keeps it.
+    ([{"name": "s/a", "type": "INTEGER"}, {"name": "s", "type": "STRUCT(a INTEGER)"}],
+     [("s/a", "t/s/a"), ("s", "t/s"), ("a", "t/s/a-2")]),
+])
+def test_from_schema_real_names_keep_their_default_ids(cols, expected) -> None:
+    assert _ids(cols) == expected

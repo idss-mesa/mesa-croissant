@@ -225,11 +225,18 @@ Registered through the `mesa_mcp.tools` entry point with `meta={"io.mesa/surface
 `mesa_croissant_from_schema` in detail:
 
 - **Names, columns, ids.** `column` keeps the exact column name, so the field reads the real
-  column; the field `name` is trimmed. A field whose default `@id` (`<parent id>/<name>`)
-  contains whitespace gets an explicit `id` with each run of whitespace replaced by `_`; if
-  that id is taken, or is the default of another field (`a b` next to `a_b`), it gets the
-  first free `-2`, `-3`, ... suffix (`_assign_ids`). Real names keep their default ids, and the
-  result depends only on the names and their order. A column name with leading or trailing
+  column; the field `name` is trimmed. A field's default `@id` is `<parent @id>/<name>`, the
+  parent's explicit id included. A field is *real* when its name is used as given (no
+  whitespace inside, nothing trimmed). A field that is not real gets its default with each
+  run of whitespace replaced by `_`; when that id is taken or belongs to a real field, it
+  gets the first free `-2`, `-3`, ... suffix (`_assign_ids`). Every real field whose parents
+  are real keeps its default id: those ids are reserved first (`a b` next to `a_b`, `a `
+  next to `a`, a member `a` of `s t` next to a column `s_t/a`). Ids are assigned level by
+  level, real fields first, so the real members of a renamed STRUCT keep
+  `<its new id>/<name>` (`s t` with members `x y` and `x_y`, next to `s_t`: `t/s_t-2`,
+  `t/s_t-2/x_y-2`, `t/s_t-2/x_y`); of two real fields with one default (a column `s/a` and
+  a member `a` of `s`), the first in order keeps it. The result depends only on the names
+  and their order. A column name with leading or trailing
   whitespace gets a warning: MESA writers trim values, so the stored `column` would not match.
 - **Warnings.** A warning about an emitted field names its AVU path (the emitted index, which
   skips blank and duplicate columns); a skipped column is named by its input position,
@@ -246,7 +253,15 @@ Registered through the `mesa_mcp.tools` entry point with `meta={"io.mesa/surface
 - **The new set.** `avus` must be canonical (convention rules 5 and 6): `croissant.*`
   attributes, non-empty values within the AVU limits, indexes `1`, `2`, ... without leading
   zeros, signs or gaps, no empty segment, and one value per single-valued path or index
-  (`croissant.license` next to `croissant.license.1` is two values for index 1). Anything else
+  (`croissant.license` next to `croissant.license.1` is two values for index 1). Gaps are
+  checked on the result: with `replace` the new set; with `merge` the new set plus the diff's
+  `unchanged` entries (`_key_errors(new, before=current, after=unchanged)`). A new-set entry
+  at index `n` is refused when the result lacks an index `i < n` and the write makes that gap
+  (`n` is new to the item, or the item had `i` and the merge removes it); an entry the item
+  already has may be edited after a gap the item already had. Stored keys are indexed the way
+  readers place them (`01` is 1). So partial merges (`creator.2` alone, record set 2 from
+  `from_schema(record_set_index=2)`, `...field.3`) pass, as they did in 1.3.0, while
+  `recordSet.2` on an item without `recordSet.1` is refused. Anything else
   is an import error naming the attributes (so a write fails with `croissant_invalid`), and
   the codec's own warning about the same key is not repeated. Unknown `croissant.*` keys are
   accepted with a warning (rule 7). Identical triples are written once. A `document` is
@@ -265,7 +280,9 @@ Registered through the `mesa_mcp.tools` entry point with `meta={"io.mesa/surface
   golden, upstream and import fixture).
 - **Size and depth.** More than 5,000 AVUs in the new set is refused with `invalid_argument`
   before the diff, in a dry run too, so a refused call returns a short error instead of the
-  whole diff and validation. A `document` (object or JSON text) nested more than
+  whole diff and validation. In a dry run's diff, a value over `VALUE_MAX` or a unit over
+  `UNIT_MAX` (always an import error) is clipped to its first 200 characters plus its length
+  (`_clip_refused`). A `document` (object or JSON text) nested more than
   `core.MAX_JSON_DEPTH` (100) levels is refused with `invalid_argument` before anything walks
   it, and so is `mesa_croissant_validate`'s (Python's JSON parser raises RecursionError at
   about 1,000 levels).

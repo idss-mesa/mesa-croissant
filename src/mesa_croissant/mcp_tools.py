@@ -140,7 +140,10 @@ class TemplateOutput(BaseModel):
 
 _TEMPLATE_NOTES = [
     "N, M and K stand for 1-based indexes, numbered without gaps (croissant.creator.1.name); "
-    "mesa_croissant_apply refuses index 0, leading zeros, gaps and two values for one path.",
+    "mesa_croissant_apply refuses index 0, leading zeros, gaps and two values for one path. "
+    "In merge mode the gap check covers the result (the new set plus the item's entries that "
+    "stay), so a set may start at index 2 or higher when the item has the entries before it "
+    "(creator.2 alone, record set 2 from mesa_croissant_from_schema).",
     "A repeatable key may also be written without its index (index 1). Writers use the "
     "indexed form, except a field's single dataType, written bare: both dataType rows are "
     "listed; give one form or the other.",
@@ -375,7 +378,9 @@ class ApplyInput(BaseModel):
             "of surrounding whitespace (with a warning). Refused: other attributes, empty "
             "values, values over the AVU limits, and keys that are not canonical: index 0, "
             "leading zeros (license.01), signs, empty segments, gaps in a list (keyword.1 "
-            "and keyword.3) and two values for one single-valued path or index "
+            "and keyword.3; in merge mode checked on the result, so keyword.3 alone is fine "
+            "when the item has keyword.1 and keyword.2) and two values for one single-valued "
+            "path or index "
             "(croissant.name twice, croissant.license next to croissant.license.1). Unknown "
             "croissant.* keys are accepted with a warning."
         ),
@@ -529,7 +534,8 @@ def _named(attrs: list[str]) -> str:
     return shown + (f" and {len(attrs) - _LISTED} more" if len(attrs) > _LISTED else "")
 
 
-def _index_problem(attr: str, lists: dict[str, dict[int, list[str]]]) -> str | None:
+def _index_problem(attr: str, lists: dict[str, dict[int, list[str]]],
+                   stored: bool = False) -> str | None:
     """Why ``attr`` is not a canonical key, or None; records the list indexes it uses.
 
     Canonical: no empty segment, and every index segment of a list (repeatable leaf or
@@ -537,6 +543,10 @@ def _index_problem(attr: str, lists: dict[str, dict[int, list[str]]]) -> str | N
     its index is canonical (rule 5: index 1). Unknown keys are not checked past the point
     where they leave the key schema (they are kept with a warning, rule 7). ``lists`` maps a
     canonical list prefix (``croissant.recordSet.1.field``) to its indexes and attributes.
+
+    ``stored``: ``attr`` is already on the item, and its indexes are recorded the way
+    readers place it (rule 5): ``01`` is index 1; index 0 and signed indexes are not
+    recorded (readers ignore index 0 and treat a sign as an unknown key).
     """
     segs = attr[len(core.PREFIX):].split(".")
     if any(s == "" for s in segs):
@@ -555,7 +565,10 @@ def _index_problem(attr: str, lists: dict[str, dict[int, list[str]]]) -> str | N
             continue
         idx = 1
         if rest and _INDEX_LIKE_RE.fullmatch(rest[0]):
-            if not _CANONICAL_INDEX_RE.fullmatch(rest[0]):
+            if stored and not _CANONICAL_INDEX_RE.fullmatch(rest[0]):
+                if not rest[0].isdigit() or int(rest[0]) == 0:
+                    return None
+            elif not _CANONICAL_INDEX_RE.fullmatch(rest[0]):
                 return (f"index {rest[0]!r} is not canonical: indexes are 1, 2, 3, ... "
                         "without leading zeros or signs (rule 5)")
             idx, rest = int(rest[0]), rest[1:]
@@ -571,22 +584,45 @@ def _index_problem(attr: str, lists: dict[str, dict[int, list[str]]]) -> str | N
     return None
 
 
-def _key_errors(avus: list[dict[str, str]]) -> tuple[list[dict[str, str]], set[str]]:
+def _key_errors(
+    avus: list[dict[str, str]], before: list[str] | None = None,
+    after: list[str] | None = None,
+) -> tuple[list[dict[str, str]], set[str]]:
     """The new set's non-canonical keys (convention rules 5 and 6) as errors.
 
     Refused: an empty segment; an index that is not ``1``, ``2``, ... (``0``, ``01``,
-    ``007``, ``-1``); a list whose indexes leave a gap (``keyword.1`` and ``keyword.3``);
+    ``007``, ``-1``); a list entry that would leave a gap (``keyword.1`` and ``keyword.3``);
     two or more values for one single-valued path or one index (``croissant.name`` twice,
     ``croissant.license`` next to ``croissant.license.1``). Unknown keys are not errors
     (rule 7). Returns ``(errors, offending attributes)``; an error's ``path`` is the
     attribute, the canonical path or the list prefix, and its message names the attributes.
-    Documents imported by :func:`mesa_croissant.core.from_jsonld` never trip these checks:
-    ``model_to_avus`` writes canonical keys.
+
+    Gaps (merge): ``before`` holds the attributes of the item's ``croissant.*`` AVUs before
+    the write and ``after`` those that stay after it (the diff's ``unchanged``). The check
+    then runs on the result, ``after`` + the new set, so a partial update (``creator.2``
+    alone, ``recordSet.2`` from ``from_schema(record_set_index=2)``, ``...field.3``) passes
+    when the item keeps the entries before it. A new-set entry at index ``n`` is refused
+    when the result lacks an index ``i < n`` and the write makes that gap: ``n`` is a new
+    index, or the item had ``i``. An entry the item already has may still be edited after a
+    gap the item already had. Stored keys are read the way readers place them. Without
+    ``before`` / ``after`` (replace) the new set is the result. Every other check looks at
+    the new set alone. Documents imported by :func:`mesa_croissant.core.from_jsonld` never
+    trip these checks: ``model_to_avus`` writes canonical keys.
     """
     errors: list[dict[str, str]] = []
     bad: set[str] = set()
     lists: dict[str, dict[int, list[str]]] = {}
     paths: dict[str, list[str]] = {}
+
+    def stored(attrs: list[str] | None) -> dict[str, dict[int, list[str]]]:
+        out: dict[str, dict[int, list[str]]] = {}
+        for attr in attrs or []:
+            # Read as readers read them; their own problems are not errors of this call.
+            if core.is_croissant_attr(attr.strip()):
+                _index_problem(attr.strip(), out, stored=True)
+        return out
+
+    had, kept = stored(before), stored(after)
     for a in avus:
         attr = a["attribute"]
         problem = _index_problem(attr, lists)
@@ -607,13 +643,25 @@ def _key_errors(avus: list[dict[str, str]]) -> tuple[list[dict[str, str]], set[s
                                  f"path): {_named(attrs)}"))
         bad.update(attrs)
     for prefix, indexes in lists.items():
-        missing = next((i for i in range(1, max(indexes) + 1) if i not in indexes), None)
-        if missing is None:
+        result = set(kept.get(prefix, ())) | set(indexes)
+        old = set(had.get(prefix, ()))
+        # Gaps this write makes: an index the item had and loses, below a new-set index;
+        # or the first missing index, below a new-set index the item did not have. (Never
+        # a scan up to the largest index: an index can be any number.)
+        made = [i for i in old - result if i < max(indexes)]
+        first = next(i for i in range(1, len(result) + 2) if i not in result)
+        if any(n > first and n not in old for n in indexes):
+            made.append(first)
+        if not made:
             continue
-        after = [x for i in sorted(indexes) if i > missing for x in indexes[i]]
-        errors.append(_msg(prefix, f"indexes of {prefix} leave a gap at {missing} (rule 5: "
-                                   f"writers number from 1 without gaps): {_named(after)}"))
-        bad.update(after)
+        missing = min(made)
+        after_gap = [x for n in sorted(indexes) if n > missing and (missing in old or n not in old)
+                     for x in indexes[n]]
+        where = " of the result (with the item's entries that stay)" if after is not None else ""
+        errors.append(_msg(prefix, f"indexes of {prefix} leave a gap at {missing}{where} "
+                                   f"(rule 5: writers number from 1 without gaps): "
+                                   f"{_named(after_gap)}"))
+        bad.update(after_gap)
     return errors, bad
 
 
@@ -654,6 +702,30 @@ def _limit_errors(avus: list[dict[str, str]]) -> list[dict[str, str]]:
         if "\x00" in a["value"] or "\x00" in a["unit"]:
             errors.append(_msg(a["attribute"], "NUL characters cannot be stored"))
     return errors
+
+
+#: Characters of a refused (over-limit) value that a result still shows.
+_CLIP_SHOWN = 200
+
+
+def _clip_refused(avus: list[dict[str, str]]) -> list[dict[str, str]]:
+    """``avus`` with values over ``VALUE_MAX`` and units over ``UNIT_MAX`` clipped.
+
+    Such a value is always an import error (nothing is written), so the diff of a refused
+    dry run shows its first ``_CLIP_SHOWN`` characters and its length instead of echoing it
+    whole (a 1.2-million-character description made a 2.4 MB result). Other AVUs are
+    returned as they are.
+    """
+    def clip(text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        return (f"{text[:_CLIP_SHOWN]}... [clipped: {len(text)} characters, over the "
+                f"{limit}-character limit]")
+
+    return [a if len(a["value"]) <= core.VALUE_MAX and len(a["unit"]) <= core.UNIT_MAX
+            else {**a, "value": clip(a["value"], core.VALUE_MAX),
+                  "unit": clip(a["unit"], core.UNIT_MAX)}
+            for a in avus]
 
 
 class _Canon(NamedTuple):
@@ -1101,16 +1173,14 @@ async def handle_apply(
         # DOI, crosswalk values); storing them would pin them.
         new, dropped, generated = drop_generated(new, item, all_current)
         warnings += dropped
-        # from_jsonld writes canonical keys; checked anyway, so both paths refuse the same.
-        key_errors, _bad = _key_errors(new)
-        import_errors += imported["errors"] + caller_errors + key_errors
+        import_errors += imported["errors"] + caller_errors
+        codec_warnings: list[dict[str, str]] = []
     else:
         new, caller_errors, trimmed = _check_new_avus(list(args.avus or []))
-        key_errors, bad = _key_errors(new)
-        import_errors += caller_errors + key_errors + _limit_errors(new)
-        # The codec's warnings about the refused keys would only repeat the errors.
-        warnings += trimmed + [w for w in core.parse_avus(new)["warnings"]
-                               if w["path"] not in bad]
+        import_errors += caller_errors + _limit_errors(new)
+        warnings += trimmed
+        codec_warnings = core.parse_avus(new)["warnings"]
+    codec_at = len(warnings)
     if target == "data_object" and any(a["attribute"].startswith("croissant.distribution.")
                                        for a in new):
         warnings.append(_msg(
@@ -1145,6 +1215,14 @@ async def handle_apply(
     if args.mode == "replace" and not new and current:
         warnings.append(_msg("", "replace with an empty set removes every croissant.* AVU "
                                  "of the convention"))
+    # Rules 5 and 6 (from_jsonld writes canonical keys; checked anyway, so both paths refuse
+    # the same). Merge checks gaps on the result: the new set plus the entries that stay.
+    key_errors, bad = _key_errors(new) if args.mode == "replace" else _key_errors(
+        new, before=[c["attribute"] for c in current],
+        after=[c["attribute"] for c in unchanged])
+    import_errors += key_errors
+    # The codec's warnings about the refused keys would only repeat the errors.
+    warnings[codec_at:codec_at] = [w for w in codec_warnings if w["path"] not in bad]
 
     # Validation of the document the item would generate after the write.
     others = [a for a in all_current if not core.is_croissant_attr(a["attribute"])]
@@ -1155,7 +1233,8 @@ async def handle_apply(
         "path_target_type": target,
         "mode": args.mode,
         "dry_run": args.dry_run,
-        "diff": {"add": add, "remove": remove, "unchanged": unchanged},
+        # A refused value is shown clipped: a dry run would otherwise echo it whole.
+        "diff": {"add": _clip_refused(add), "remove": remove, "unchanged": unchanged},
         "counts": {"add": len(add), "remove": len(remove), "unchanged": len(unchanged),
                    "current": len(current), "new": len(new)},
         "written": {"added": 0, "removed": 0},
@@ -1291,6 +1370,8 @@ def _field_model(name: str, typed: dict[str, Any], *, source: str | None, column
     (no members; DuckDB never reports one) is typed ``sc:Text``, with a warning.
     """
     f: dict[str, Any] = {"name": name.strip() or name}
+    if f["name"] != name:
+        f[_TRIMMED_MARK] = True  # read and removed by _assign_ids
     types = typed.get("dataTypes") or ([typed["dataType"]] if typed.get("dataType") else [])
     subs = typed.get("subFields")
     if subs is not None and not subs and depth == 0:
@@ -1329,45 +1410,72 @@ def _field_model(name: str, typed: dict[str, Any], *, source: str | None, column
     return f
 
 
+_TRIMMED_MARK = "_trimmed"
+_REAL_MARK = "_real"
+
+
 def _assign_ids(fields: list[dict[str, Any]], rs_id: str) -> None:
     """Give fields whose default ``@id`` would not do an explicit, unique ``id``.
 
-    A field's default ``@id`` is ``<parent @id>/<name>`` (core, convention section 6). A
-    field whose default contains whitespace gets that id with each run of whitespace
-    replaced by ``_``; when that id is taken, or will be taken by another field's default
-    (``a b`` next to a column ``a_b``), it gets the first free ``-2``, ``-3``, ... suffix.
-    Fields keep their default id wherever it is free, so a real column name never yields to
-    a normalised one. Deterministic: the result depends only on the names and their order.
+    A field's default ``@id`` is ``<parent @id>/<name>`` (core, convention section 6), the
+    parent's explicit id included. A field is *real* when its name is the column or member
+    name as given: no whitespace inside and none trimmed (``_field_model`` marks a trimmed
+    name). A field that is not real gets its default with each run of whitespace replaced
+    by ``_`` (a trimmed name: the default itself), or, when that id is taken or belongs to
+    a real field, the first free ``-2``, ``-3``, ... suffix. So:
+
+    * every real field whose parents are real too keeps its default id: those ids are
+      reserved before anything is assigned (``a b`` next to a column ``a_b``, ``a `` next
+      to ``a``, a member ``a`` of ``s t`` next to a column ``s_t/a``);
+    * the real members of a renamed STRUCT keep ``<its new id>/<name>`` unless a real field
+      of the line above already holds it: fields are assigned level by level, the real
+      ones of a level first;
+    * two real fields with the same default (a column ``s/a`` and a member ``a`` of ``s``):
+      the first in order keeps it.
+
+    Deterministic: the result depends only on the names and their order.
     """
     reserved: set[str] = set()
 
-    def reserve(fs: list[dict[str, Any]], parent: str) -> None:
+    def mark(fs: list[dict[str, Any]], parent: str | None) -> None:
         for f in fs:
-            default = f"{parent}/{f['name']}"
-            if not _WS_RE.search(default):
-                reserved.add(default)
-            reserve(f.get("subField") or [], _WS_RE.sub("_", default))
+            f[_REAL_MARK] = not f.pop(_TRIMMED_MARK, False) and not _WS_RE.search(f["name"])
+            chain = f"{parent}/{f['name']}" if parent is not None and f[_REAL_MARK] else None
+            if chain is not None:
+                reserved.add(chain)
+            mark(f.get("subField") or [], chain)
 
+    mark(fields, rs_id)
     used: set[str] = set()
-
-    def assign(fs: list[dict[str, Any]], parent: str) -> None:
-        for i, f in enumerate(fs):
-            default = f"{parent}/{f['name']}"
-            if not _WS_RE.search(default) and default not in used:
-                eff = default
-            else:
-                base = eff = _WS_RE.sub("_", default)
-                n = 2
-                while eff in used or (eff in reserved and eff != default):
-                    eff = f"{base}-{n}"
-                    n += 1
-                fs[i] = f = {"name": f["name"], "id": eff,
-                             **{k: v for k, v in f.items() if k != "name"}}
-            used.add(eff)
-            assign(f.get("subField") or [], eff)
-
-    reserve(fields, rs_id)
-    assign(fields, rs_id)
+    level = [(fields, i, rs_id, True) for i in range(len(fields))]
+    while level:
+        eff: dict[tuple[int, int], str] = {}
+        for fs, i, parent, chain in level:  # real fields claim their defaults first
+            default = f"{parent}/{fs[i]['name']}"
+            if fs[i][_REAL_MARK] and default not in used \
+                    and (default not in reserved or chain):
+                eff[(id(fs), i)] = default
+                used.add(default)
+        for fs, i, parent, _chain in level:
+            if (id(fs), i) in eff:
+                continue
+            base = out = _WS_RE.sub("_", f"{parent}/{fs[i]['name']}")
+            n = 2
+            while out in used or out in reserved:
+                out = f"{base}-{n}"
+                n += 1
+            eff[(id(fs), i)] = out
+            used.add(out)
+        below = []
+        for fs, i, parent, chain in level:
+            f, out = fs[i], eff[(id(fs), i)]
+            keeps = f.pop(_REAL_MARK) and out == f"{parent}/{f['name']}"
+            if out != f"{parent}/{f['name']}":
+                fs[i] = f = {"name": f["name"], "id": out,
+                             **{k: v for k, v in f.items() if k not in ("name", "id")}}
+            subs = f.get("subField") or []
+            below += [(subs, k, out, chain and keeps) for k in range(len(subs))]
+        level = below
 
 
 @register_tool(

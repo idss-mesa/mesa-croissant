@@ -33,7 +33,7 @@ parse and export (tests).
   - Field ids are unique: a name with whitespace gets the default id with whitespace runs
     replaced by `_`, plus the first free `-2`, `-3`, ... when that id is another field's
     default or taken (`a b` next to `a_b` gave both `t/a_b`). Deterministic; real names keep
-    their default ids.
+    their default ids (see pass 3 for the cases pass 2 missed).
   - `column` keeps the exact column name (it was trimmed, so `'  padded  '` read a column
     `padded`); the field `name` is trimmed. Such a column gets a warning, since MESA writers
     store values trimmed.
@@ -66,6 +66,25 @@ parse and export (tests).
   apply refuses), field `id` and `column`; DESIGN and README describe the new checks and limits
   and list the expected behaviours the live test confirmed (dav-anon redirects, validator
   strictness, argument coercion, ...).
+
+### Verification fixes (pass 3)
+
+- **`mesa_croissant_apply` merge checks gaps on the result.** Pass 2 ran the gap check on the
+  new set alone, so merge refused every partial update starting at index 2 or higher
+  (`creator.2` alone, a new `keyword.3`, `...field.3`, record set 2 from
+  `from_schema(record_set_index=2)`), which 1.3.0 accepted. Merge now checks the new set plus
+  the entries that stay: a new entry is refused only when the write leaves a gap before it
+  (a new index after a missing one, or an entry the merge removes). Entries already stored
+  after an old gap can still be edited; stored keys are read as readers read them (`01` = 1).
+  `replace` still checks the new set alone. All other key checks are unchanged.
+- **Refused dry runs are bounded.** A value over 2,700 characters (or a unit over 250) in the
+  diff is clipped to its first 200 characters plus its length: a dry run with a
+  1,200,000-character description returned 2.4 MB, now about 5 kB.
+- **`mesa_croissant_from_schema` ids.** Real names now keep their default ids in the cases
+  pass 2 missed: a real member of a renamed STRUCT (`s t` next to `s_t`: the member `x_y`
+  keeps `t/s_t-2/x_y`, `x y` gets `t/s_t-2/x_y-2`), a trimmed name next to the exact one
+  (`a ` next to `a`: `a` keeps `t/a`) and a column name with `/` equal to a member path
+  (`s_t/a` keeps `t/s_t/a`).
 
 ## 1.3.0 (2026-11-08)
 
