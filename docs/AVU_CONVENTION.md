@@ -36,20 +36,48 @@ are converted to their 1.1 forms).
    ISO 8601 (`2024-03-01`, `2024`, `2024-03-01T12:00:00Z`). A value is never empty (iRODS
    refuses empty values); an absent property is an absent AVU. A whitespace-only value counts
    as empty: readers ignore it with a warning (editors drop it on the next save) and importers
-   leave it out with a warning. Non-blank values are never trimmed. Values are at most 2,700
-   characters and units at most 250 (portal and Terrain limits).
+   leave it out with a warning. Values are at most 2,700 characters and units at most 250
+   (portal and Terrain limits).
+
+   **Whitespace.** Readers and the codec never trim a non-blank stored value: they show,
+   compare and write back exactly what is stored (data-info compares AVUs exactly). Writers
+   store *new* values and units trimmed of leading and trailing whitespace: the portal editor
+   trims the text typed into its fields, and `mesa_croissant_apply` trims every attribute,
+   value and unit it writes (mesa-mcp's iRODS helper strips every triple), with a warning
+   naming each attribute it trimmed. Whitespace inside a value is kept, so a multi-line
+   description keeps its line breaks and loses only a trailing newline. A value whose
+   surrounding whitespace matters (a `column` name with padding) therefore cannot be written
+   through these tools; `mesa_croissant_from_schema` warns about such a column.
 4. **Units are empty** unless this document gives them a meaning:
    - `croissant.keyword.N`: optional CURIE or IRI of the term (makes a `DefinedTerm`), the
-     same rule as MESA ontology AVUs (`unit = CURIE`).
+     same rule as MESA ontology AVUs (`unit = CURIE`). A keyword holds a name and one term
+     identifier: importing a `DefinedTerm` keeps its `name` and its `termCode` (else `url`,
+     else `@id`) and reports, with a warning, a `url` next to a `termCode` and an
+     `inDefinedTermSet` (there is no key for them; a sub-key of the repeatable
+     `croissant.keyword.N` would not follow its keyword when 1.3.0 readers renumber the
+     list). A document generated with `keyword_style="text"` (what mlcroissant 1.1.1 loads)
+     lists plain names, from these AVUs or the crosswalk (section 7): a `DefinedTerm`
+     becomes its name, and a name already listed (compared case-insensitively) is left
+     out, keeping the first spelling and the order.
    - `croissant.geo.spatialResolution`, `croissant.geo.temporalResolution`: unit text such as
      `m`, `km`, `s`, `day` (becomes `QuantitativeValue.unitText`).
    - `croissant.distribution.N.contentSize`: optional unit, default `B`.
-5. **Indexes.** Writers number from 1 without gaps. Readers sort by index, accept gaps and
-   ignore index 0. A property listed as repeatable below may also be written without an
-   index (`croissant.license` is read as `croissant.license.1`).
+5. **Indexes.** Writers number from 1 without gaps, without leading zeros (`1`, not `01`).
+   Readers sort by index, accept gaps and leading zeros, and ignore index 0. A property
+   listed as repeatable below may also be written without an index (`croissant.license` is
+   read as `croissant.license.1`). `mesa_croissant_apply` refuses a new set that breaks the
+   writer rule (index 0, `01`, `007`, `-1`, an empty segment such as `croissant..name`, or a
+   gap such as `keyword.1` with `keyword.3`), with an error naming the attributes; AVUs
+   already stored are read as above. Gaps are judged on what the item holds after the write:
+   with `replace` that is the new set, with `merge` the new set plus the stored entries that
+   stay. So a merge may give `creator.2` or `recordSet.2` alone when the item already has
+   index 1; it is refused when it would leave a gap (a new index after a missing one, or an
+   entry the merge removes before a new one). An entry already stored after an old gap may
+   still be edited.
 6. **One value per path.** Two AVUs with the same attribute are an error for scalar paths
-   (and for the same index of a repeatable property); readers use the first in AVU order and
-   report a warning. Editors keep the extra values: they are written back on save (with
+   (and for the same index of a repeatable property, `croissant.license` next to
+   `croissant.license.1` included); readers use the first in AVU order and report a
+   warning, and `mesa_croissant_apply` refuses such a new set. Editors keep the extra values: they are written back on save (with
    their entity when the path is below one, see rule 7) until someone deletes them in
    the raw AVU view. Only the first value reaches the JSON-LD. An extra value at an index
    of a repeatable property belongs to the value it duplicates: when an editor renumbers
@@ -169,11 +197,11 @@ On the dataset folder: `croissant.distribution.N.<sub>`.
 | `name` | both | defaults to `id` |
 | `description` | both | |
 | `contentUrl` | FileObject | absolute URL, or a path relative to the dataset root (`data/x.csv`), written as the plain path (`my dir/a b.csv`, not percent-encoded) |
-| `encodingFormat` | both | MIME type (`text/csv`, `application/x-parquet`, `image/tiff`) |
+| `encodingFormat` | both | MIME type (`text/csv`, `application/x-parquet`, `image/tiff`). When absent the generator takes the type of the `contentUrl` extension (a FileSet: of its first `includes` with a known extension), else `application/octet-stream`: mlcroissant requires an `encodingFormat` on every FileObject and FileSet. A writer importing a document leaves out an `encodingFormat` equal to that derived type for an entry `N` the item stores without one (so applying an unedited export adds nothing); a new entry, or one stored with an `encodingFormat`, keeps the document's value (`generated_encoding_formats`) |
 | `contentSize` | FileObject | number of bytes; unit optional (default `B`) |
 | `sha256` / `md5` | FileObject | hex digests |
 | `containedIn.M` | both | `id`s of the FileObject(s)/FileSet(s) containing this one |
-| `includes.M` / `excludes.M` | FileSet | glob patterns relative to the dataset root (`data/**/*.parquet`) |
+| `includes.M` / `excludes.M` | FileSet | glob patterns relative to the dataset root (`data/*.parquet`, `data/**/*.parquet`). mlcroissant 1.1.1 matches them with Python's `fnmatch`: `*` also matches `/`, and `**/` needs at least one more folder, so `data/**/*.parquet` alone misses `data/x.parquet`. To cover a folder at any depth, give both patterns (a file matching both is read once) |
 
 A relative `contentUrl` is resolved against the dataset root when the document is
 generated: public paths become `https://data.cyverse.org/dav-anon/<path>`, other paths
@@ -194,9 +222,13 @@ that FileObject as their source.
 Importing a document **for a file** maps the FileObject that describes the file (the entry
 whose `@id` is the file's `@id`, else whose `contentUrl` is the file, else the only entry) to
 `croissant.file.*`: `description` and `sha256` always, `name` / `encodingFormat` / `md5` only
-when they differ from the file name / the format of its extension / the stat MD5. `@id`,
+when they differ from the file name / the format of its extension (`application/octet-stream`
+for an extension without a known type) / the stat MD5. `@id`,
 `contentUrl` and `contentSize` are generated and not stored; a field `source` naming the file
 is left out (fields default to it). Every other distribution entry is reported and dropped.
+So `replace` with an unedited export removes a stored `croissant.file.encodingFormat` that
+equals the derived type (1.3.0 stored `application/octet-stream` for an unknown extension);
+the generated document stays the same.
 
 ## 6. Record sets and fields (`cr:RecordSet`, `cr:Field`)
 
@@ -218,11 +250,11 @@ is left out (fields default to it). Every other distribution entry is reported a
 | Sub-key | Notes |
 |---|---|
 | `name` | **required** |
-| `id` | defaults to `<recordSet id>/<name>` |
+| `id` | defaults to `<recordSet id>/<name>`; unique in the dataset. Writers give an explicit `id` when the default contains whitespace: the default with each run of whitespace replaced by `_` (`mesa_croissant_from_schema` adds `-2`, `-3`, ... when that id is another field's default or already taken, so `a b` next to a column `a_b` gets `<recordSet id>/a_b-2`; a name used as given keeps its default, a trimmed or whitespace name yields to it) |
 | `description` | |
-| `dataType` / `dataType.K` | one or several types: `sc:Text`, `sc:Integer`, `sc:Float`, `sc:Boolean`, `sc:Date`, `sc:DateTime`, `sc:Time`, `sc:URL`, `sc:ImageObject`, `sc:GeoShape`, `sc:GeoCoordinates`, `cr:Int8…cr:Int64`, `cr:UInt8…cr:UInt64`, `cr:Float16/32/64`, `cr:BoundingBox`, `cr:Label`, `cr:Split`, `cr:SegmentationMask`, or any CURIE/IRI. The `sc:`/`cr:` prefix is optional on read |
+| `dataType` / `dataType.K` | one or several types: `sc:Text`, `sc:Integer`, `sc:Float`, `sc:Boolean`, `sc:Date`, `sc:DateTime`, `sc:Time`, `sc:URL`, `sc:ImageObject`, `sc:GeoShape`, `sc:GeoCoordinates`, `cr:Int8…cr:Int64`, `cr:UInt8…cr:UInt64`, `cr:Float16/32/64`, `cr:BoundingBox`, `cr:Label`, `cr:Split`, `cr:SegmentationMask`, or any CURIE/IRI. The `sc:`/`cr:` prefix is optional on read. mlcroissant 1.1.1 reads a field's values with the first of its types it knows: `sc:Boolean`, `sc:Date`, `sc:DateTime`, `sc:Float`, `sc:Integer`, `sc:Text`, `sc:Time`, `sc:URL`, `cr:Int*`, `cr:UInt*`, `cr:Float*`, `sc:ImageObject`, `sc:AudioObject`, `sc:VideoObject`, `cr:BoundingBox`. A semantic type it does not read (`sc:GeoShape`, `sc:GeoCoordinates`, `sc:Number`, `sc:Enumeration`, `cr:Label`, `cr:Split`, `cr:SegmentationMask`, other CURIEs) should be given next to one it reads, e.g. `dataType.1 = sc:GeoShape`, `dataType.2 = sc:Text`; a field with none of them (and no subFields, and no field as its source) gets a validator warning, not an error |
 | `source` | `id` of a distribution entry (FileObject or FileSet) or of another record set. With a record set and a `column` naming one of its fields the source is emitted as that field; a bare record-set source is valid Croissant 1.1 but mlcroissant 1.1 cannot load it (the validator warns) |
-| `column` | `extract.column` (CSV, Parquet) |
+| `column` | `extract.column` (CSV, Parquet): the exact column name (the field `name` may be trimmed, the column is not) |
 | `jsonPath` | `extract.jsonPath` |
 | `fileProperty` | `extract.fileProperty`: `fullpath`, `filename`, `content`, `lines`, `lineNumbers` |
 | `regex` | `transform.regex` |
@@ -251,10 +283,18 @@ never copy these automatically; an editor may offer "copy into Croissant".
 | `datePublished` | `datacite.publicationYear`, `datacite.date.N` with `dateType=Issued`, `dc.date` |
 | `version` | `datacite.version` |
 | `identifier`, `url` | `datacite.identifier` with `identifierType=DOI` → `https://doi.org/<doi>` |
-| `keywords` | `datacite.subject.N.value`, then ontology AVUs (`<ontology>.<key>` whose unit is a CURIE) as `DefinedTerm`s |
+| `keywords` | `datacite.subject.N.value` in index order, then ontology AVUs (`<ontology>.<key>` whose unit is a CURIE) as `DefinedTerm`s (`termCode` = the unit). The term's `name` is its label when a subject names the term: its `classificationCode` or `valueURI` is the CURIE (or its OBO PURL `http(s)://purl.obolibrary.org/obo/<PREFIX>_<id>`), or its value ends with `(<CURIE>)`, as in `area of deciduous forest (ENVO:01000816)`. The label is the subject's value without a final `(<CURIE>)` (or `(<PURL>)`) of the term, however the subject names it. That `DefinedTerm` then takes the subject's place in the list, so the term is not listed twice, and further AVUs of a term a subject names are not listed again. Without such a subject the `name` is the AVU value, which may be free text: the attribute key is not used, since an editor that picks a sub-term keeps the parent field's key (`envo.biome` with a sub-term's label and CURIE). Such unnamed terms are listed once per value and term: two AVUs with the same CURIE and different values give two `DefinedTerm`s |
 | `temporalCoverage` | `neon.temporalCoverage`, `datacite.date.N` with `dateType=Collected` |
 | `spatialCoverage` | `datacite.geoLocation.N.box` (`S,W,N,E` → `S W N E`), `datacite.geoLocation.N.point`, `datacite.geoLocation.N.place`; else the flat (legacy) `datacite.geoLocationBox`, `datacite.geoLocationPoint`, `datacite.geoLocationPlace` (the indexed keys take precedence) |
 | `prov:wasGeneratedBy` | `mesa.generated_by` (a URL becomes `{"@id": …}`) |
+
+Writers that import a document (`mesa_croissant_apply`, the portal's convert) leave out a
+property whose `croissant.*` AVUs give exactly the crosswalk value, so a later DataCite edit
+still reaches the document. Core 1.3.0 derived `keywords` differently (every subject, then
+each ontology AVU as a `DefinedTerm` named by its value); writers also accept that list
+(`legacy_keyword_avus`), so a document a 1.3.0 reader exported for an unchanged item pins no
+keywords. A 1.3.0 writer cannot know the 1.3.1 list: a 1.3.1 export saved through a 1.3.0
+reader stores `croissant.keyword.N`. Deploy the portal and mesa-mcp with the same core.
 
 ## 8. MESA DuckLake projects
 
@@ -264,7 +304,11 @@ A folder with `mesa.enabled=true` that is a registered DuckLake (portal
 - a FileObject for the catalog file (`encodingFormat` `application/x-ducklake`, an
   unregistered media type used by MESA, `contentUrl` relative to the root);
 - a FileSet per table `ducklake-<table>` with `encodingFormat` `application/x-parquet` and
-  `includes` `<data path>/<schema>/<table>/**/*.parquet`;
+  `includes` `<data path>/<schema>/<table>/*.parquet` and
+  `<data path>/<schema>/<table>/**/*.parquet` (an unpartitioned table keeps its files
+  directly in the table folder, a partitioned one in `k=v/` folders; see section 5 for why
+  both). FileSets written with only the `**/` pattern (core 1.3.0) stay valid but find no
+  files of an unpartitioned table in mlcroissant 1.1.1;
 - from the portal DuckDB viewer, one RecordSet per table with one Field per column
   (`source` = the table's FileSet, `column` = the column name, `dataType` from the DuckDB type
   map in section 9).
@@ -281,8 +325,10 @@ A folder with `mesa.enabled=true` that is a registered DuckLake (portal
 | DATE | `sc:Date` |
 | TIME, TIMETZ | `sc:Time` |
 | TIMESTAMP*, TIMESTAMPTZ | `sc:DateTime` |
-| VARCHAR, UUID, INTERVAL, BLOB, JSON, ENUM, anything else | `sc:Text` |
-| GEOMETRY (spatial extension) | `sc:GeoShape` |
+| VARCHAR, UUID, INTERVAL, BLOB, JSON, ENUM, anything else | `sc:Text` (JSON is read as its text) |
+| GEOMETRY, WKB_BLOB | `dataType.1 = sc:GeoShape`, `dataType.2 = sc:Text`: Parquet stores the WKB bytes, which mlcroissant 1.1.1 reads as text (bytes); it cannot read `sc:GeoShape` alone |
+| POINT_2D, BOX_2D, LINESTRING_2D, POLYGON_2D (spatial extension) | their Parquet layout, as for STRUCT: POINT_2D is `sc:GeoCoordinates` with subFields `x`, `y` (`cr:Float64`); BOX_2D is `sc:GeoShape` with `min_x`, `min_y`, `max_x`, `max_y`; LINESTRING_2D is `sc:GeoShape`, `isArray`, subFields `x`, `y`; POLYGON_2D the same with `arrayShape` `-1,-1` (mlcroissant 1.1.1 does not read subFields of a list of lists; `mesa_croissant_from_schema` warns) |
+| `MAP(K, V)` | no dataType; `isArray=true` (one more `-1` in `arrayShape`) with the subFields `key` (type of `K`, `transformJsonPath` `$[0]`) and `value` (type of `V`, `transformJsonPath` `$[1]`). mlcroissant (pandas) reads a Parquet MAP as a list of (key, value) pairs; as `sc:Text` it fails the whole record set |
 | `T[]`, `LIST(T)`, `T[n]` | dataType of `T` with `isArray=true` (`arrayShape` `-1` or `n`) |
 | STRUCT(...) | no dataType on the field; one `subField` per member. Writers should give each member `transformJsonPath` = the member's JSONPath: the bare name for a plain identifier, else `$['…']` (section 6, `transformJsonPath`); it then reads the parent's source and column, and mlcroissant loads it. A member that is itself a STRUCT is typed `sc:Text` (one level of nesting) and gets no `transformJsonPath` (with one, mlcroissant 1.1.1 fails the whole record set casting the object to text; without it the member reads as null). A member without it is read from its parent's source and column and the validator warns, without an error |
 

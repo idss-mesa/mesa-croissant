@@ -2,9 +2,10 @@
 
 ## Version 1 (current)
 
-Convention version 1, `core.py` 1.3.0 (1.1.0: review fixes, `transformJsonPath`, file
+Convention version 1, `core.py` 1.3.1 (1.1.0: review fixes, `transformJsonPath`, file
 import; 1.2.0: unknown keys and duplicates kept with their entity, `UNKNOWN_KEY`; 1.3.0: a
-duplicate list index kept on the leaf it duplicates, `DUP_KEY`). The design is in [DESIGN.md](DESIGN.md) and the contract in
+duplicate list index kept on the leaf it duplicates, `DUP_KEY`; 1.3.1: fixes from the live
+MCP test, see [CHANGELOG.md](../CHANGELOG.md)). The design is in [DESIGN.md](DESIGN.md) and the contract in
 [AVU_CONVENTION.md](AVU_CONVENTION.md).
 
 In scope:

@@ -20,6 +20,7 @@ See ``docs/AVU_CONVENTION.md`` and ``docs/DESIGN.md``.
 from __future__ import annotations
 
 import contextlib
+import json
 import posixpath
 import re
 from typing import Any, Literal, NamedTuple
@@ -51,8 +52,16 @@ TOOL_NAMES = (TEMPLATE, EXPORT, VALIDATE, APPLY, FROM_SCHEMA)
 
 #: Most AVUs one apply call may write (the portal's per-request limit).
 MAX_AVUS = 5000
-#: Most columns one from_schema call accepts.
-MAX_COLUMNS = 2000
+#: AVUs a plain column gives in from_schema (name, dataType, source, column).
+_AVUS_PER_COLUMN = 4
+#: Most columns one from_schema call accepts: derived from MAX_AVUS (less the record set's
+#: id, name and description), so the result of a full call still fits one apply call.
+#: STRUCT and MAP columns give more AVUs; a result over MAX_AVUS is refused.
+MAX_COLUMNS = (MAX_AVUS - 3) // _AVUS_PER_COLUMN
+
+#: Most messages returned per list (validation errors and warnings, apply warnings and
+#: import errors); the number left out is ``<name>_truncated`` (as the portal's convert).
+MAX_REPORTED = 200
 
 _WS_RE = re.compile(r"\s+")
 #: An index segment, matched with ``fullmatch`` as core does (``$`` would accept a final "\n").
@@ -63,6 +72,23 @@ KeywordStyle = Literal["defined_term", "text"]
 
 def _msg(path: str, message: str) -> dict[str, str]:
     return {"path": path, "message": message}
+
+
+def _capped(out: dict[str, Any], *names: str) -> dict[str, Any]:
+    """``out`` with each named list cut to ``MAX_REPORTED`` and ``<name>_truncated`` set to
+    the number left out (only when something was). Nothing else changes: ``valid`` and the
+    counts still reflect every message."""
+    out = dict(out)
+    for name in names:
+        values = out.get(name) or []
+        if len(values) > MAX_REPORTED:
+            out[name] = values[:MAX_REPORTED]
+            out[f"{name}_truncated"] = len(values) - MAX_REPORTED
+    return out
+
+
+def _capped_report(report: dict[str, Any]) -> dict[str, Any]:
+    return _capped(report, "errors", "warnings")
 
 
 # -- shared schemas --------------------------------------------------------------------------------
@@ -88,13 +114,17 @@ class Summary(BaseModel):
 
 
 class ValidationReport(BaseModel):
-    """:func:`mesa_croissant.core.validate` result."""
+    """:func:`mesa_croissant.core.validate` result. ``errors`` and ``warnings`` hold at most
+    200 messages each; ``errors_truncated`` / ``warnings_truncated`` count the rest (set only
+    when messages were left out; ``valid`` counts them all)."""
 
     valid: bool
     errors: list[Message]
     warnings: list[Message]
     conformsTo: list[str]
     summary: Summary
+    errors_truncated: int | None = None
+    warnings_truncated: int | None = None
 
 
 # -- mesa_croissant_template -----------------------------------------------------------------------
@@ -111,7 +141,13 @@ class TemplateInput(BaseModel):
 class KeyRow(BaseModel):
     attribute: str
     cardinality: Literal["one", "many"]
-    required: bool
+    required: bool = Field(
+        ...,
+        description=(
+            "Required where the key lives: in the dataset for a dataset-level key, in each "
+            "given entry for a key below an entry (N, M, K)."
+        ),
+    )
     level: str
     unit: str
     description: str
@@ -128,9 +164,20 @@ class TemplateOutput(BaseModel):
 
 
 _TEMPLATE_NOTES = [
-    "N, M and K stand for 1-based indexes, numbered without gaps (croissant.creator.1.name).",
+    "N, M and K stand for 1-based indexes, numbered without gaps (croissant.creator.1.name); "
+    "mesa_croissant_apply refuses index 0, leading zeros, gaps and two values for one path. "
+    "In merge mode the gap check covers the result (the new set plus the item's entries that "
+    "stay), so a set may start at index 2 or higher when the item has the entries before it "
+    "(creator.2 alone, record set 2 from mesa_croissant_from_schema).",
+    "A repeatable key may also be written without its index (index 1). Writers use the "
+    "indexed form, except a field's single dataType, written bare: both dataType rows are "
+    "listed; give one form or the other.",
+    "required: required in the dataset for a dataset-level key; for a key below an entry "
+    "(N, M, K), required in each entry of that list that is given (publisher is optional, "
+    "but each publisher needs a name).",
     "Values are text; booleans are true/false; dates are ISO 8601; a value is never empty.",
-    "Values are at most 2,700 characters and units at most 250.",
+    "Values are at most 2,700 characters and units at most 250. Writers store values "
+    "trimmed of leading and trailing whitespace (line breaks inside a value are kept).",
     "Units are empty except croissant.keyword.N (CURIE or IRI of the term), "
     "croissant.geo.*Resolution (unit text) and croissant.distribution.N.contentSize (default B).",
     "Required properties without a croissant.* AVU are filled from datacite.*, dc.* and "
@@ -234,6 +281,12 @@ def _generate(path: str, auth_value: AuthValue, url: str | None,
 
 
 # -- mesa_croissant_export -------------------------------------------------------------------------
+_KEYWORD_STYLE_DESCRIPTION = (
+    "defined_term (default, Croissant 1.1) writes ontology keywords as sc:DefinedTerm; "
+    "text writes plain names, which mlcroissant 1.1.1 requires to load the document."
+)
+
+
 class ExportInput(BaseModel):
     path: str = Field(..., description="iRODS path of the dataset folder or the file.")
     url: str | None = Field(
@@ -244,11 +297,7 @@ class ExportInput(BaseModel):
         ),
     )
     keyword_style: KeywordStyle = Field(
-        default="defined_term",
-        description=(
-            "defined_term (default, Croissant 1.1) writes ontology keywords as sc:DefinedTerm; "
-            "text writes plain names, which mlcroissant 1.1.1 requires to load the document."
-        ),
+        default="defined_term", description=_KEYWORD_STYLE_DESCRIPTION,
     )
 
 
@@ -280,7 +329,7 @@ async def handle_export(
         "path_target_type": target,
         "document": generated["document"],
         "sources": generated["sources"],
-        "validation": generated["validation"],
+        "validation": _capped_report(generated["validation"]),
         "croissant_avu_count": count,
     }
 
@@ -294,6 +343,11 @@ class ValidateInput(BaseModel):
         default=None,
         description="Or: the iRODS path whose generated document is validated.",
     )
+    keyword_style: KeywordStyle = Field(
+        default="defined_term",
+        description=_KEYWORD_STYLE_DESCRIPTION + " Used with 'path' (the document is "
+        "generated as mesa_croissant_export would); ignored with 'document'.",
+    )
 
 
 class ValidateOutput(ValidationReport):
@@ -304,7 +358,9 @@ class ValidateOutput(ValidationReport):
 
 _MLCROISSANT_HINT = (
     "This is mesa-croissant's structural check. For the full MLCommons check run "
-    "`mlcroissant validate --jsonld <file>` (pip install mlcroissant)."
+    "`mlcroissant validate --jsonld <file>` (pip install mlcroissant). Warnings naming "
+    "mlcroissant 1.1.1 mark what it cannot load; for sc:DefinedTerm keywords export (or "
+    "validate a path) with keyword_style 'text'."
 )
 
 
@@ -326,11 +382,13 @@ async def handle_validate(
             message="Give exactly one of 'document' or 'path'.",
         )
     if args.document is not None:
-        report = core.validate(args.document)
-        return {**report, "checked": "document", "path": None, "hint": _MLCROISSANT_HINT}
+        report = core.validate(_document_arg(args.document))
+        return {**_capped_report(report), "checked": "document", "path": None,
+                "hint": _MLCROISSANT_HINT}
     auth = _require_auth(auth_value, VALIDATE)
-    norm, _target, generated, _count = _generate(str(args.path), auth, None, "defined_term")
-    return {**generated["validation"], "checked": "path", "path": norm,
+    norm, _target, generated, _count = _generate(str(args.path), auth, None,
+                                                 args.keyword_style)
+    return {**_capped_report(generated["validation"]), "checked": "path", "path": norm,
             "hint": _MLCROISSANT_HINT}
 
 
@@ -352,8 +410,15 @@ class ApplyInput(BaseModel):
     avus: list[AvuItem] | None = Field(
         default=None,
         description=(
-            "Or: croissant.* AVUs to apply as given (e.g. from mesa_croissant_from_schema). "
-            "Other attributes are refused."
+            "Or: croissant.* AVUs to apply (e.g. from mesa_croissant_from_schema), trimmed "
+            "of surrounding whitespace (with a warning). Refused: other attributes, empty "
+            "values, values over the AVU limits, and keys that are not canonical: index 0, "
+            "leading zeros (license.01), signs, empty segments, gaps in a list (keyword.1 "
+            "and keyword.3; in merge mode checked on the result, so keyword.3 alone is fine "
+            "when the item has keyword.1 and keyword.2) and two values for one single-valued "
+            "path or index "
+            "(croissant.name twice, croissant.license next to croissant.license.1). Unknown "
+            "croissant.* keys are accepted with a warning."
         ),
     )
     mode: Literal["merge", "replace"] = Field(
@@ -423,6 +488,10 @@ class ApplyOutput(BaseModel):
     import_errors: list[Message]
     validation: ValidationReport
     partial_failure: PartialFailure | None = None
+    warnings_truncated: int | None = Field(
+        default=None, description="Warnings left out (each message list holds at most 200).")
+    import_errors_truncated: int | None = Field(
+        default=None, description="Import errors left out (at most 200 are listed).")
 
 
 def _triple(a: dict[str, str]) -> tuple[str, str, str]:
@@ -455,11 +524,25 @@ def _remove_exact(session: Any, norm: str, target: str, r: dict[str, str]) -> di
     return {"attribute": r["attribute"], "value": r["value"], "unit": r["unit"]}
 
 
-def _check_new_avus(items: list[AvuItem]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Normalise caller AVUs the way the iRODS helper writes them; return (avus, errors)."""
+_TRIMMED = ("leading or trailing whitespace trimmed: MESA writers store values and units "
+            "trimmed (whitespace inside the value, line breaks included, is kept)")
+
+
+def _check_new_avus(
+    items: list[AvuItem],
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+    """Normalise caller AVUs the way the iRODS helper writes them.
+
+    Returns ``(avus, errors, warnings)``. Attribute, value and unit are trimmed (mesa-mcp's
+    ``add_avu_to_irods`` strips every triple, so nothing else can be written); a value or
+    unit that loses whitespace gets a warning (convention rule 3). Identical triples are
+    written once.
+    """
     out: list[dict[str, str]] = []
     errors: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
+    trimmed: set[str] = set()
     for it in items:
         attr, value, unit = it.attribute.strip(), it.value.strip(), it.unit.strip()
         if not core.is_croissant_attr(attr):
@@ -469,12 +552,182 @@ def _check_new_avus(items: list[AvuItem]) -> tuple[list[dict[str, str]], list[di
         if not value:
             errors.append(_msg(attr, "empty value (iRODS refuses empty values)"))
             continue
+        if (value != it.value or unit != it.unit or attr != it.attribute) \
+                and attr not in trimmed:
+            trimmed.add(attr)
+            warnings.append(_msg(attr, _TRIMMED))
         t = (attr, value, unit)
         if t in seen:
             continue
         seen.add(t)
         out.append(_avu(t))
-    return out, errors
+    return out, errors, warnings
+
+
+_INDEX_LIKE_RE = re.compile(r"[+-]?[0-9]+")
+_CANONICAL_INDEX_RE = re.compile(r"[1-9][0-9]*")
+_LISTED = 10  # offending attributes named in one message
+
+
+def _named(attrs: list[str]) -> str:
+    shown = ", ".join(attrs[:_LISTED])
+    return shown + (f" and {len(attrs) - _LISTED} more" if len(attrs) > _LISTED else "")
+
+
+def _index_problem(attr: str, lists: dict[str, dict[int, list[str]]],
+                   stored: bool = False) -> str | None:
+    """Why ``attr`` is not a canonical key, or None; records the list indexes it uses.
+
+    Canonical: no empty segment, and every index segment of a list (repeatable leaf or
+    entity) is ``1``, ``2``, ... without leading zeros or a sign. A repeatable key without
+    its index is canonical (rule 5: index 1). Unknown keys are not checked past the point
+    where they leave the key schema (they are kept with a warning, rule 7). ``lists`` maps a
+    canonical list prefix (``croissant.recordSet.1.field``) to its indexes and attributes.
+
+    ``stored``: ``attr`` is already on the item, and its indexes are recorded the way
+    readers place it (rule 5): ``01`` is index 1; index 0 and signed indexes are not
+    recorded (readers ignore index 0 and treat a sign as an unknown key).
+    """
+    segs = attr[len(core.PREFIX):].split(".")
+    if any(s == "" for s in segs):
+        return "empty segment in the attribute (two dots in a row, or a dot at either end)"
+    schema: dict = core._DATASET
+    prefix = core.PREFIX
+    while segs:
+        name, rest = segs[0], segs[1:]
+        spec = schema.get(name)
+        if spec is None or spec[0] == "S":
+            return None
+        if spec[0] == "G":
+            if not rest:
+                return None
+            schema, segs, prefix = spec[1], rest, f"{prefix}{name}."
+            continue
+        idx = 1
+        if rest and _INDEX_LIKE_RE.fullmatch(rest[0]):
+            if stored and not _CANONICAL_INDEX_RE.fullmatch(rest[0]):
+                if not rest[0].isdigit() or int(rest[0]) == 0:
+                    return None
+            elif not _CANONICAL_INDEX_RE.fullmatch(rest[0]):
+                return (f"index {rest[0]!r} is not canonical: indexes are 1, 2, 3, ... "
+                        "without leading zeros or signs (rule 5)")
+            idx, rest = int(rest[0]), rest[1:]
+        if spec[0] == "L":
+            if rest:  # croissant.license.1.x: an unknown key
+                return None
+            lists.setdefault(prefix + name, {}).setdefault(idx, []).append(attr)
+            return None
+        if not rest:  # an entity without a sub-key: an unknown key
+            return None
+        lists.setdefault(prefix + name, {}).setdefault(idx, []).append(attr)
+        schema, segs, prefix = spec[1], rest, f"{prefix}{name}.{idx}."
+    return None
+
+
+def _key_errors(
+    avus: list[dict[str, str]], before: list[str] | None = None,
+    after: list[str] | None = None,
+) -> tuple[list[dict[str, str]], set[str]]:
+    """The new set's non-canonical keys (convention rules 5 and 6) as errors.
+
+    Refused: an empty segment; an index that is not ``1``, ``2``, ... (``0``, ``01``,
+    ``007``, ``-1``); a list entry that would leave a gap (``keyword.1`` and ``keyword.3``);
+    two or more values for one single-valued path or one index (``croissant.name`` twice,
+    ``croissant.license`` next to ``croissant.license.1``). Unknown keys are not errors
+    (rule 7). Returns ``(errors, offending attributes)``; an error's ``path`` is the
+    attribute, the canonical path or the list prefix, and its message names the attributes.
+
+    Gaps (merge): ``before`` holds the attributes of the item's ``croissant.*`` AVUs before
+    the write and ``after`` those that stay after it (the diff's ``unchanged``). The check
+    then runs on the result, ``after`` + the new set, so a partial update (``creator.2``
+    alone, ``recordSet.2`` from ``from_schema(record_set_index=2)``, ``...field.3``) passes
+    when the item keeps the entries before it. A new-set entry at index ``n`` is refused
+    when the result lacks an index ``i < n`` and the write makes that gap: ``n`` is a new
+    index, or the item had ``i``. An entry the item already has may still be edited after a
+    gap the item already had. Stored keys are read the way readers place them. Without
+    ``before`` / ``after`` (replace) the new set is the result. Every other check looks at
+    the new set alone. Documents imported by :func:`mesa_croissant.core.from_jsonld` never
+    trip these checks: ``model_to_avus`` writes canonical keys.
+    """
+    errors: list[dict[str, str]] = []
+    bad: set[str] = set()
+    lists: dict[str, dict[int, list[str]]] = {}
+    paths: dict[str, list[str]] = {}
+
+    def stored(attrs: list[str] | None) -> dict[str, dict[int, list[str]]]:
+        out: dict[str, dict[int, list[str]]] = {}
+        for attr in attrs or []:
+            # Read as readers read them; their own problems are not errors of this call.
+            if core.is_croissant_attr(attr.strip()):
+                _index_problem(attr.strip(), out, stored=True)
+        return out
+
+    had, kept = stored(before), stored(after)
+    for a in avus:
+        attr = a["attribute"]
+        problem = _index_problem(attr, lists)
+        if problem:
+            errors.append(_msg(attr, problem))
+            bad.add(attr)
+            continue
+        info = _canon(attr)
+        if info is not None:
+            paths.setdefault(info.path, []).append(attr)
+    for path, attrs in paths.items():
+        if len(attrs) < 2:
+            continue
+        head, _, last = path.rpartition(".")
+        where = (f"index {last} of {head}" if _INDEX_SEG_RE.fullmatch(last)
+                 else "a single-valued path")
+        errors.append(_msg(path, f"{len(attrs)} values for {where} (rule 6: one value per "
+                                 f"path): {_named(attrs)}"))
+        bad.update(attrs)
+    for prefix, indexes in lists.items():
+        result = set(kept.get(prefix, ())) | set(indexes)
+        old = set(had.get(prefix, ()))
+        # Gaps this write makes: an index the item had and loses, below a new-set index;
+        # or the first missing index, below a new-set index the item did not have. (Never
+        # a scan up to the largest index: an index can be any number.)
+        made = [i for i in old - result if i < max(indexes)]
+        first = next(i for i in range(1, len(result) + 2) if i not in result)
+        if any(n > first and n not in old for n in indexes):
+            made.append(first)
+        if not made:
+            continue
+        missing = min(made)
+        after_gap = [x for n in sorted(indexes) if n > missing and (missing in old or n not in old)
+                     for x in indexes[n]]
+        where = " of the result (with the item's entries that stay)" if after is not None else ""
+        errors.append(_msg(prefix, f"indexes of {prefix} leave a gap at {missing}{where} "
+                                   f"(rule 5: writers number from 1 without gaps): "
+                                   f"{_named(after_gap)}"))
+        bad.update(after_gap)
+    return errors, bad
+
+
+_TOO_DEEP = f"the document is nested more than {core.MAX_JSON_DEPTH} levels deep"
+
+
+def _document_arg(document: dict[str, Any] | str) -> dict[str, Any] | str:
+    """A ``document`` argument, parsed; ``invalid_argument`` when it is nested too deeply.
+
+    JSON text is parsed here (text that is not JSON is returned as it is, for core to
+    report), so a deeply nested document is refused before anything walks it: Python's
+    JSON parser raises RecursionError at about 1,000 levels, and core's walk is recursive.
+    """
+    doc: Any = document
+    if isinstance(doc, str):
+        try:
+            doc = json.loads(doc)
+        except RecursionError:
+            raise ToolError(code="invalid_argument", message=_TOO_DEEP,
+                            details={"max_depth": core.MAX_JSON_DEPTH}) from None
+        except ValueError:
+            return document
+    if core._too_deep(doc):
+        raise ToolError(code="invalid_argument", message=_TOO_DEEP,
+                        details={"max_depth": core.MAX_JSON_DEPTH})
+    return doc
 
 
 def _limit_errors(avus: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -489,6 +742,30 @@ def _limit_errors(avus: list[dict[str, str]]) -> list[dict[str, str]]:
         if "\x00" in a["value"] or "\x00" in a["unit"]:
             errors.append(_msg(a["attribute"], "NUL characters cannot be stored"))
     return errors
+
+
+#: Characters of a refused (over-limit) value that a result still shows.
+_CLIP_SHOWN = 200
+
+
+def _clip_refused(avus: list[dict[str, str]]) -> list[dict[str, str]]:
+    """``avus`` with values over ``VALUE_MAX`` and units over ``UNIT_MAX`` clipped.
+
+    Such a value is always an import error (nothing is written), so the diff of a refused
+    dry run shows its first ``_CLIP_SHOWN`` characters and its length instead of echoing it
+    whole (a 1.2-million-character description made a 2.4 MB result). Other AVUs are
+    returned as they are.
+    """
+    def clip(text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        return (f"{text[:_CLIP_SHOWN]}... [clipped: {len(text)} characters, over the "
+                f"{limit}-character limit]")
+
+    return [a if len(a["value"]) <= core.VALUE_MAX and len(a["unit"]) <= core.UNIT_MAX
+            else {**a, "value": clip(a["value"], core.VALUE_MAX),
+                  "unit": clip(a["unit"], core.UNIT_MAX)}
+            for a in avus]
 
 
 class _Canon(NamedTuple):
@@ -601,6 +878,47 @@ def _key(a: dict[str, str]) -> tuple[str, str, str]:
     return (a["attribute"].strip(), a["value"].strip(), (a.get("unit") or "").strip())
 
 
+def _implied_defaults(new: list[dict[str, str]]) -> dict[str, str]:
+    """Values the codec derives for keys the new set leaves out, by canonical path.
+
+    A ``distribution`` or ``recordSet`` entry's ``name`` defaults to its ``id``, and a
+    field's (or subField's) ``id`` defaults to ``<parent id>/<name>`` (convention section 6).
+    A document import leaves such a value out, so a stored copy of it says nothing the new
+    set does not: :func:`compute_diff` keeps it rather than removing it.
+    """
+    vals: dict[str, str] = {}
+    owners: set[str] = set()
+    for a in new:
+        info = _canon(a["attribute"].strip())
+        if info is None or not info.owner:
+            continue
+        owners.add(info.owner)
+        vals.setdefault(info.path, a["value"].strip())
+
+    def is_field(owner: str) -> bool:
+        return owner.split(".")[-2] in ("field", "subField")
+
+    def eff_id(owner: str, depth: int = 0) -> str | None:
+        explicit = vals.get(owner + ".id")
+        if explicit or not is_field(owner) or depth > core.MAX_JSON_DEPTH:
+            return explicit or None
+        parent = eff_id(owner.rsplit(".", 2)[0], depth + 1)
+        name = vals.get(owner + ".name")
+        return f"{parent}/{name}" if parent and name else None
+
+    out: dict[str, str] = {}
+    for owner in owners:
+        parts = owner.split(".")
+        if len(parts) == 3 and parts[1] in ("distribution", "recordSet"):
+            if owner + ".name" not in vals and vals.get(owner + ".id"):
+                out[owner + ".name"] = vals[owner + ".id"]
+        elif parts[1] == "recordSet" and is_field(owner) and owner + ".id" not in vals:
+            fid = eff_id(owner)
+            if fid:
+                out[owner + ".id"] = fid
+    return out
+
+
 def compute_diff(
     current: list[dict[str, str]], new: list[dict[str, str]], mode: str,
     drop_unknown: bool = False,
@@ -629,6 +947,11 @@ def compute_diff(
     keys and index-0 entries (convention rule 7: editors keep them; a document cannot carry
     them), unless ``drop_unknown``. An unknown attribute the new set gives is replaced.
 
+    In both modes a current value the codec would derive anyway for a key the new set
+    leaves out (:func:`_implied_defaults`: an entry name equal to its id, a field id equal to
+    ``<parent id>/<name>``) is unchanged, not removed: a document import never carries such a
+    default, so without this re-applying an unedited export would remove it.
+
     In both modes an unknown key (or index-0 entry) belongs to the deepest entity its
     attribute reaches (:func:`_entity_chain`, as the codec binds it). When the diff removes
     that entity, or one above it, because of its known keys, the unknown key is removed with
@@ -649,6 +972,18 @@ def compute_diff(
         if k in new_keys and k not in claimed and i not in claimed.values():
             claimed[k] = i
     matched = set(claimed.values())
+
+    # A stored value equal to the default the codec derives for a key the new set leaves
+    # out (a name equal to the id, a field id equal to <parent id>/<name>) stays: the
+    # document is the same with or without it, so re-applying an export is a no-op.
+    implied = _implied_defaults(new)
+    defaulted: set[str] = set()
+    for i, c in enumerate(cur):
+        info = _canon(c["attribute"].strip())
+        if (i not in matched and info is not None and info.path in implied
+                and info.path not in defaulted and c["value"].strip() == implied[info.path]):
+            matched.add(i)
+            defaulted.add(info.path)
 
     keep: list[dict[str, str]] = []
     remove: list[dict[str, str]] = []
@@ -806,6 +1141,12 @@ _MSG_DEFAULT_URL = "the default landing page URL is generated, not stored"
 _MSG_DOI_ID = "the DOI URL is taken from the item's datacite.identifier, not stored"
 
 
+def _msg_derived(count: int) -> str:
+    return (f"{count} encodingFormat value(s) equal to the type derived from the file "
+            "extension not stored: the item stores these entries without one, and the "
+            "document still gives it")
+
+
 def _has_stem(attribute: str, stem: str) -> bool:
     return attribute == stem or attribute.startswith(stem + ".")
 
@@ -823,14 +1164,24 @@ def _same_default(prop: str, others: list[dict[str, str]], subset: list[dict[str
 
     Keywords without units (a document exported with ``keyword_style=text``) also match
     when they give the same plain names: the default keeps the term codes they lost.
+    Keywords also match the list the 1.3.0 crosswalk gave (:func:`core.legacy_keyword_avus`),
+    so a document exported by a 1.3.0 reader for an unchanged item pins nothing.
     """
-    if core.to_jsonld(others + subset, item=item)["document"].get(prop) == default:
+    given = core.to_jsonld(others + subset, item=item)["document"].get(prop)
+    if given == default:
         return True
-    if prop != "keywords" or any(a.get("unit") for a in subset):
+    if prop != "keywords":
+        return False
+    legacy = core.legacy_keyword_avus(others)
+    if legacy and given == core.to_jsonld(others + legacy, item=item)["document"].get(prop):
+        return True
+    if any(a.get("unit") for a in subset):
         return False
     text_item = {**item, "keyword_style": "text"}
-    return (core.to_jsonld(others + subset, item=text_item)["document"].get(prop)
-            == core.to_jsonld(others, item=text_item)["document"].get(prop))
+    given = core.to_jsonld(others + subset, item=text_item)["document"].get(prop)
+    defaults = [others] + ([others + legacy] if legacy else [])
+    return any(given == core.to_jsonld(d, item=text_item)["document"].get(prop)
+               for d in defaults)
 
 
 def drop_generated(
@@ -848,7 +1199,11 @@ def drop_generated(
       DOI URL, and ``croissant.identifier`` equal to the DOI URL, are always left out;
     * a property whose ``croissant.*`` AVUs generate exactly the value the item gets
       without them (from ``item`` and the non-Croissant AVUs of ``current``) is left out,
-      with a warning naming the source.
+      with a warning naming the source (keywords also when they give the 1.3.0
+      crosswalk's list);
+    * a ``croissant.distribution.N.encodingFormat`` equal to the type the generator
+      derives for that entry is left out when the item stores entry N without one
+      (:func:`core.generated_encoding_formats`).
 
     The same rule as the MESA Portal's ``croissant_service.drop_generated``.
     """
@@ -874,6 +1229,10 @@ def drop_generated(
     if dropped_id:
         warnings.append(_msg("croissant.identifier", _MSG_DOI_ID))
         stems.append("croissant.identifier")
+    derived = {_triple(a) for a in core.generated_encoding_formats(kept, current)}
+    if derived:
+        kept = [a for a in kept if _triple(a) not in derived]
+        warnings.append(_msg("croissant.distribution", _msg_derived(len(derived))))
 
     base = core.to_jsonld(others, item=item)
     for prop, stem in CROSSWALK_STEMS.items():
@@ -914,6 +1273,7 @@ async def handle_apply(
                         message="Give exactly one of 'document' or 'avus'.")
     if not args.dry_run and auth.is_anonymous():
         raise ToolError(code="forbidden", message="Anonymous callers cannot write AVUs.")
+    document = _document_arg(args.document) if args.document is not None else None
 
     norm, session, target = _open_path(args.path, auth)
     item = _item_for(session, norm, target, None, "defined_term")
@@ -923,22 +1283,26 @@ async def handle_apply(
     warnings: list[dict[str, str]] = []
     import_errors: list[dict[str, str]] = []
     generated: list[str] = []
-    if args.document is not None:
+    if document is not None:
         # Item mode: for a file, the FileObject that describes it becomes croissant.file.*
         # (its generated parts and a checksum equal to the stat md5 left out).
-        imported = core.from_jsonld(args.document, content_base=args.content_base or None,
+        imported = core.from_jsonld(document, content_base=args.content_base or None,
                                     item=item)
-        new, caller_errors = _check_new_avus([AvuItem(**a) for a in imported["avus"]])
-        warnings += imported["warnings"]
+        new, caller_errors, trimmed = _check_new_avus(
+            [AvuItem(**a) for a in imported["avus"]])
+        warnings += imported["warnings"] + trimmed
         # A document exported for this path carries the generated defaults (landing page,
         # DOI, crosswalk values); storing them would pin them.
         new, dropped, generated = drop_generated(new, item, all_current)
         warnings += dropped
         import_errors += imported["errors"] + caller_errors
+        codec_warnings: list[dict[str, str]] = []
     else:
-        new, caller_errors = _check_new_avus(list(args.avus or []))
+        new, caller_errors, trimmed = _check_new_avus(list(args.avus or []))
         import_errors += caller_errors + _limit_errors(new)
-        warnings += core.parse_avus(new)["warnings"]
+        warnings += trimmed
+        codec_warnings = core.parse_avus(new)["warnings"]
+    codec_at = len(warnings)
     if target == "data_object" and any(a["attribute"].startswith("croissant.distribution.")
                                        for a in new):
         warnings.append(_msg(
@@ -947,7 +1311,13 @@ async def handle_apply(
             "its only FileObject (describe it with croissant.file.*)",
         ))
     if len(new) > MAX_AVUS:
-        import_errors.append(_msg("", f"{len(new)} AVUs; at most {MAX_AVUS} per call"))
+        # Refused before the diff: a dry run would otherwise return the whole diff and the
+        # validation of every entry (megabytes for a set nobody can write).
+        raise ToolError(
+            code="invalid_argument",
+            message=f"{len(new)} croissant.* AVUs; at most {MAX_AVUS} per call.",
+            details={"count": len(new), "limit": MAX_AVUS},
+        )
 
     add, remove, unchanged, diff_warnings = compute_diff(current, new, args.mode,
                                                          drop_unknown=args.drop_unknown)
@@ -967,6 +1337,14 @@ async def handle_apply(
     if args.mode == "replace" and not new and current:
         warnings.append(_msg("", "replace with an empty set removes every croissant.* AVU "
                                  "of the convention"))
+    # Rules 5 and 6 (from_jsonld writes canonical keys; checked anyway, so both paths refuse
+    # the same). Merge checks gaps on the result: the new set plus the entries that stay.
+    key_errors, bad = _key_errors(new) if args.mode == "replace" else _key_errors(
+        new, before=[c["attribute"] for c in current],
+        after=[c["attribute"] for c in unchanged])
+    import_errors += key_errors
+    # The codec's warnings about the refused keys would only repeat the errors.
+    warnings[codec_at:codec_at] = [w for w in codec_warnings if w["path"] not in bad]
 
     # Validation of the document the item would generate after the write.
     others = [a for a in all_current if not core.is_croissant_attr(a["attribute"])]
@@ -977,7 +1355,8 @@ async def handle_apply(
         "path_target_type": target,
         "mode": args.mode,
         "dry_run": args.dry_run,
-        "diff": {"add": add, "remove": remove, "unchanged": unchanged},
+        # A refused value is shown clipped: a dry run would otherwise echo it whole.
+        "diff": {"add": _clip_refused(add), "remove": remove, "unchanged": unchanged},
         "counts": {"add": len(add), "remove": len(remove), "unchanged": len(unchanged),
                    "current": len(current), "new": len(new)},
         "written": {"added": 0, "removed": 0},
@@ -985,15 +1364,17 @@ async def handle_apply(
         "kept": [],
         "warnings": warnings,
         "import_errors": import_errors,
-        "validation": preview["validation"],
+        "validation": _capped_report(preview["validation"]),
     }
+    result = _capped(result, "warnings", "import_errors")
     if args.dry_run:
         return result
     if import_errors:
         raise ToolError(
             code="croissant_invalid",
             message="The new Croissant AVUs cannot be written; nothing was changed.",
-            details={"errors": import_errors, "warnings": warnings},
+            details=_capped({"errors": import_errors, "warnings": warnings},
+                            "errors", "warnings"),
         )
 
     changes: list[tuple[str, str, str, Literal["add", "delete"]]] = []
@@ -1078,10 +1459,6 @@ class FromSchemaOutput(BaseModel):
     next_step: str
 
 
-def _safe_id(text: str) -> str:
-    return _WS_RE.sub("_", text.strip())
-
-
 _PLAIN_MEMBER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -1097,9 +1474,13 @@ def _member_json_path(name: str) -> str:
 
 
 def _field_model(name: str, typed: dict[str, Any], *, source: str | None, column: str | None,
-                 parent_id: str, path: str, warnings: list[dict[str, str]],
-                 depth: int = 0) -> dict[str, Any]:
-    """The model of one column (``depth`` 0) or STRUCT member (``depth`` 1).
+                 path: str, warnings: list[dict[str, str]], depth: int = 0) -> dict[str, Any]:
+    """The model of one column (``depth`` 0) or STRUCT member (``depth`` 1), without ``id``.
+
+    ``name`` is the column or member name exactly as the schema gives it: the field's
+    ``name`` is it trimmed, while ``column`` (passed by the caller) and a member's
+    ``transformJsonPath`` keep it exact, since they must match the data. Field ids are
+    assigned afterwards for the whole record set (:func:`_assign_ids`).
 
     A member reads its value from the parent's column with ``transformJsonPath`` = its
     name (:func:`_member_json_path`): it inherits the parent's source and column
@@ -1107,21 +1488,28 @@ def _field_model(name: str, typed: dict[str, Any], *, source: str | None, column
     STRUCT column. A member that is itself a STRUCT is typed ``sc:Text`` and gets no
     transform (convention section 9, STRUCT row; the portal DuckDB viewer writes the same):
     with it mlcroissant 1.1 fails the whole record set casting the object to text, without
-    it the member reads as null and core only warns.
+    it the member reads as null and core only warns. A MAP entry's ``key`` / ``value`` read
+    ``$[0]`` / ``$[1]`` (``typed["transformJsonPath"]``), and every type of ``dataTypes``
+    is written (GEOMETRY: ``sc:GeoShape`` and ``sc:Text``). A column typed ``STRUCT()``
+    (no members; DuckDB never reports one) is typed ``sc:Text``, with a warning.
     """
-    f: dict[str, Any] = {"name": name}
-    fid = f"{parent_id}/{name}"
-    if _WS_RE.search(name):
-        f["id"] = _safe_id(fid)
-    if typed.get("dataType"):
-        f["dataType"] = [typed["dataType"]]
+    f: dict[str, Any] = {"name": name.strip() or name}
+    if f["name"] != name:
+        f[_TRIMMED_MARK] = True  # read and removed by _assign_ids
+    types = typed.get("dataTypes") or ([typed["dataType"]] if typed.get("dataType") else [])
+    subs = typed.get("subFields")
+    if subs is not None and not subs and depth == 0:
+        warnings.append(_msg(path, "STRUCT without members (a malformed type): typed sc:Text"))
+        types, subs = ["sc:Text"], None
+    if types:
+        f["dataType"] = list(types)
     if source:
         f["source"] = source
     if column:
         f["column"] = column
-    subs = typed.get("subFields")
     if depth >= 1 and subs is None:
-        f["transformJsonPath"] = _member_json_path(name)
+        # A MAP entry's key / value come with their positional path ($[0] / $[1]).
+        f["transformJsonPath"] = typed.get("transformJsonPath") or _member_json_path(name)
     if typed.get("isArray"):
         f["isArray"] = "true"
         if typed.get("arrayShape"):
@@ -1134,13 +1522,84 @@ def _field_model(name: str, typed: dict[str, Any], *, source: str | None, column
             f["dataType"] = ["sc:Text"]
             warnings.append(_msg(path, "nested STRUCT below the first level is typed sc:Text"))
         else:
+            if "," in (typed.get("arrayShape") or ""):
+                warnings.append(_msg(path, "mlcroissant 1.1.1 cannot read subFields under a "
+                                           f"list of lists (arrayShape {typed['arrayShape']}): "
+                                           "loading this record set fails"))
             f["subField"] = [
                 _field_model(str(s["name"]), s, source=None, column=None,
-                             parent_id=f.get("id", fid), path=f"{path}.subField.{k}",
-                             warnings=warnings, depth=depth + 1)
+                             path=f"{path}.subField.{k}", warnings=warnings, depth=depth + 1)
                 for k, s in enumerate(subs, 1)
             ]
     return f
+
+
+_TRIMMED_MARK = "_trimmed"
+_REAL_MARK = "_real"
+
+
+def _assign_ids(fields: list[dict[str, Any]], rs_id: str) -> None:
+    """Give fields whose default ``@id`` would not do an explicit, unique ``id``.
+
+    A field's default ``@id`` is ``<parent @id>/<name>`` (core, convention section 6), the
+    parent's explicit id included. A field is *real* when its name is the column or member
+    name as given: no whitespace inside and none trimmed (``_field_model`` marks a trimmed
+    name). A field that is not real gets its default with each run of whitespace replaced
+    by ``_`` (a trimmed name: the default itself), or, when that id is taken or belongs to
+    a real field, the first free ``-2``, ``-3``, ... suffix. So:
+
+    * every real field whose parents are real too keeps its default id: those ids are
+      reserved before anything is assigned (``a b`` next to a column ``a_b``, ``a `` next
+      to ``a``, a member ``a`` of ``s t`` next to a column ``s_t/a``);
+    * the real members of a renamed STRUCT keep ``<its new id>/<name>`` unless a real field
+      of the line above already holds it: fields are assigned level by level, the real
+      ones of a level first;
+    * two real fields with the same default (a column ``s/a`` and a member ``a`` of ``s``):
+      the first in order keeps it.
+
+    Deterministic: the result depends only on the names and their order.
+    """
+    reserved: set[str] = set()
+
+    def mark(fs: list[dict[str, Any]], parent: str | None) -> None:
+        for f in fs:
+            f[_REAL_MARK] = not f.pop(_TRIMMED_MARK, False) and not _WS_RE.search(f["name"])
+            chain = f"{parent}/{f['name']}" if parent is not None and f[_REAL_MARK] else None
+            if chain is not None:
+                reserved.add(chain)
+            mark(f.get("subField") or [], chain)
+
+    mark(fields, rs_id)
+    used: set[str] = set()
+    level = [(fields, i, rs_id, True) for i in range(len(fields))]
+    while level:
+        eff: dict[tuple[int, int], str] = {}
+        for fs, i, parent, chain in level:  # real fields claim their defaults first
+            default = f"{parent}/{fs[i]['name']}"
+            if fs[i][_REAL_MARK] and default not in used \
+                    and (default not in reserved or chain):
+                eff[(id(fs), i)] = default
+                used.add(default)
+        for fs, i, parent, _chain in level:
+            if (id(fs), i) in eff:
+                continue
+            base = out = _WS_RE.sub("_", f"{parent}/{fs[i]['name']}")
+            n = 2
+            while out in used or out in reserved:
+                out = f"{base}-{n}"
+                n += 1
+            eff[(id(fs), i)] = out
+            used.add(out)
+        below = []
+        for fs, i, parent, chain in level:
+            f, out = fs[i], eff[(id(fs), i)]
+            keeps = f.pop(_REAL_MARK) and out == f"{parent}/{f['name']}"
+            if out != f"{parent}/{f['name']}":
+                fs[i] = f = {"name": f["name"], "id": out,
+                             **{k: v for k, v in f.items() if k not in ("name", "id")}}
+            subs = f.get("subField") or []
+            below += [(subs, k, out, chain and keeps) for k in range(len(subs))]
+        level = below
 
 
 @register_tool(
@@ -1149,8 +1608,12 @@ def _field_model(name: str, typed: dict[str, Any], *, source: str | None, column
     "schema: one field per column with source, column and dataType from the DuckDB type map "
     "(lists become isArray, STRUCTs become subFields read with transformJsonPath = the "
     "member name, quoted as $['...'] unless a plain identifier; a STRUCT member that is "
-    "itself a STRUCT is typed sc:Text without a transform). Writes nothing; pass the AVUs "
-    "to mesa_croissant_apply.",
+    "itself a STRUCT is typed sc:Text without a transform; a MAP becomes an isArray field "
+    "with subFields key and value read with $[0] / $[1]; GEOMETRY (WKB) is typed "
+    "[sc:GeoShape, sc:Text]). column keeps the exact column name; field names are trimmed, "
+    "and a name with whitespace gets an explicit id (whitespace runs become _, made unique). "
+    f"At most {MAX_COLUMNS} columns and {MAX_AVUS} AVUs (one apply call). Writes nothing; "
+    "pass the AVUs to mesa_croissant_apply.",
     input_model=FromSchemaInput,
     output_model=FromSchemaOutput,
     meta=META,
@@ -1168,32 +1631,44 @@ async def handle_from_schema(args: FromSchemaInput) -> dict[str, Any]:
         raise ToolError(code="invalid_argument", message="columns must not be empty.")
     if len(args.columns) > MAX_COLUMNS:
         raise ToolError(code="invalid_argument",
-                        message=f"{len(args.columns)} columns; at most {MAX_COLUMNS}.")
+                        message=f"{len(args.columns)} columns; at most {MAX_COLUMNS} (one "
+                                f"apply call writes at most {MAX_AVUS} AVUs).",
+                        details={"count": len(args.columns), "limit": MAX_COLUMNS})
 
     n = args.record_set_index
     warnings: list[dict[str, str]] = []
     fields: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for m, col in enumerate(args.columns, 1):
-        name = col.name.strip()
+    seen: dict[str, int] = {}
+    for i, col in enumerate(args.columns):
+        # Skipped columns have no field: their messages name the input (columns[i]).
+        raw = col.name
+        if not raw.strip():
+            warnings.append(_msg(f"columns[{i}]", "column without a name skipped"))
+            continue
+        if raw in seen:
+            warnings.append(_msg(f"columns[{i}]", f"duplicate column {raw!r} skipped (it is "
+                                                  f"croissant.recordSet.{n}.field.{seen[raw]})"))
+            continue
+        m = len(fields) + 1
+        seen[raw] = m
         path = f"croissant.recordSet.{n}.field.{m}"
-        if not name:
-            warnings.append(_msg(path, "column without a name skipped"))
-            continue
-        if name in seen:
-            warnings.append(_msg(path, f"duplicate column {name!r} skipped"))
-            continue
-        seen.add(name)
         typed = core.duckdb_type_to_croissant(col.type)
-        f = _field_model(name, typed, source=src, column=name, parent_id=rs_id,
-                         path=path, warnings=warnings)
+        # The exact column name, so the field reads the real column.
+        f = _field_model(raw, typed, source=src, column=raw, path=path, warnings=warnings)
+        if raw != raw.strip():
+            warnings.append(_msg(f"{path}.column", (
+                f"column name {raw!r} has leading or trailing whitespace: the field's column "
+                "keeps it, but MESA writers (mesa_croissant_apply, the portal editor) store "
+                "values trimmed, so the stored column would not match; rename the column")))
         if col.description and col.description.strip():
             f["description"] = col.description.strip()
         fields.append(f)
+    _assign_ids(fields, rs_id)
 
     rs: dict[str, Any] = {"id": rs_id}
-    if args.record_set_name and args.record_set_name.strip():
-        rs["name"] = args.record_set_name.strip()
+    if args.record_set_name and args.record_set_name.strip() \
+            and args.record_set_name.strip() != rs_id:
+        rs["name"] = args.record_set_name.strip()  # a name equal to the id is the default
     if args.description and args.description.strip():
         rs["description"] = args.description.strip()
     rs["field"] = fields
@@ -1202,6 +1677,14 @@ async def handle_from_schema(args: FromSchemaInput) -> dict[str, Any]:
         prefix = "croissant.recordSet.1."
         avus = [{**a, "attribute": f"croissant.recordSet.{n}." + a["attribute"][len(prefix):]}
                 for a in avus]
+    if len(avus) > MAX_AVUS:
+        raise ToolError(code="invalid_argument",
+                        message=f"these columns give {len(avus)} AVUs; one apply call writes "
+                                f"at most {MAX_AVUS}: give fewer columns",
+                        details={"count": len(avus), "limit": MAX_AVUS})
+    # The AVU limits apply refuses: reported here already, on the attribute.
+    warnings += [_msg(e["path"], f"{e['message']}; mesa_croissant_apply refuses it")
+                 for e in _limit_errors(avus)]
     return {
         "record_set_id": rs_id,
         "avus": avus,

@@ -10,10 +10,15 @@ Known mlcroissant 1.1.1 behaviour, accepted here:
 * ``keywords`` given as ``sc:DefinedTerm`` objects are rejected (mlcroissant types
   ``keywords`` as text), although Croissant 1.1 allows DefinedTerm. Documents built
   with ``item["keyword_style"] = "text"`` load without that error.
+* An ``@context`` that is not an object, and ``http://schema.org/`` documents, are refused.
+  ``core.validate`` warns about these three (tests at the end).
 * A FileObject without ``sha256``/``md5`` is an error unless ``isLiveDataset``.
 * Warnings it always prints: the context differs from its own (``path``,
   ``repeated``, ``replace``, ``samplingRate`` are not in the Croissant 1.1 context),
   and ``citeAs`` / ``version`` are recommended when absent.
+* A field is read only with a data type it knows (``sc:GeoShape`` alone is refused), a
+  Parquet MAP reads as (key, value) pairs, and ``includes`` match with ``fnmatch``. The
+  Parquet tests at the end (they need pyarrow, ``mlcroissant[parquet]``) load records.
 """
 
 from __future__ import annotations
@@ -227,7 +232,9 @@ def test_schema_parity_record_set_loads_its_records(tmp_path):
     its records: STRUCT members read through transformJsonPath (a quoted name too), a
     LIST(STRUCT) column gives a list of member objects, and the nested STRUCT member typed
     sc:Text has no transform. With one, mlcroissant 1.1 fails the whole record set casting
-    the object to text; without it the member reads as null."""
+    the object to text; without it the member reads as null. A MAP column gives a list of
+    key / value objects, and a GEOMETRY column typed [sc:GeoShape, sc:Text] reads as
+    text."""
     import hashlib
 
     from conftest import FIXTURES, load_json
@@ -265,3 +272,284 @@ def test_schema_parity_record_set_loads_its_records(tmp_path):
     assert [(int(m["t/l/a"]), float(m["t/l/it's"])) for m in first["t/l"]] == [
         (1, 1.5), (2, 2.5)]
     assert list(first["t/tags"]) in ([b"x", b"y"], ["x", "y"])
+    assert [(m["t/m/key"], int(m["t/m/value"])) for m in first["t/m"]] == [
+        (b"k1", 1), (b"k2", 2)]
+    assert first["t/g"] == b"0101000000000000000000f03f0000000000000040"
+
+
+def test_from_schema_unique_ids_keep_colliding_columns_apart(tmp_path):
+    """1.3.1: from_schema gives a column 'a b' the id t/a_b-2 when a column 'a_b' exists
+    (1.3.0 gave both t/a_b, and mlcroissant merged them into one field). With the unique
+    ids both columns load as separate fields with their own values."""
+    import hashlib
+
+    model = {
+        "name": _leaves("T"), "description": _leaves("t"),
+        "license": [_leaves("https://creativecommons.org/licenses/by/4.0/")],
+        "creator": [{"name": _leaves("MESA"), "type": _leaves("Organization")}],
+        "datePublished": _leaves("2026-11-06"),
+        "distribution": [{"id": _leaves("t.jsonl"), "type": _leaves("FileObject"),
+                          "contentUrl": _leaves("t.jsonl"),
+                          "encodingFormat": _leaves("application/jsonlines")}],
+        # What mesa_croissant_from_schema writes for the columns 'a b', 'a_b'.
+        "recordSet": [_leaves({"id": "t", "field": [
+            {"name": "a b", "id": "t/a_b-2", "dataType": ["sc:Text"], "source": "t.jsonl",
+             "column": "a b"},
+            {"name": "a_b", "dataType": ["sc:Text"], "source": "t.jsonl", "column": "a_b"},
+        ]})],
+    }
+    item = {"path": "/iplant/home/shared/x", "name": "x", "is_folder": True}
+    out = core.to_jsonld(core.model_to_avus(model), item=item)
+    assert out["validation"]["errors"] == []
+    doc = out["document"]
+    data = json.dumps({"a b": "x", "a_b": "y"}) + "\n"
+    (tmp_path / "t.jsonl").write_text(data, encoding="utf-8")
+    doc["distribution"][0].update({"contentUrl": "t.jsonl",
+                                   "md5": hashlib.md5(data.encode()).hexdigest()})
+    (tmp_path / "metadata.json").write_text(json.dumps(doc), encoding="utf-8")
+    records = list(mlc.Dataset(jsonld=str(tmp_path / "metadata.json")).records("t"))
+    assert len(records) == 1
+    assert records[0]["t/a_b-2"] in (b"x", "x") and records[0]["t/a_b"] in (b"y", "y")
+
+
+# ---------------------------------------------------------------------------
+# Parquet record loading (needs pyarrow: pip install "mlcroissant[parquet]")
+# ---------------------------------------------------------------------------
+
+_NON_LOADABLE = ["sc:GeoShape", "sc:GeoCoordinates", "sc:Number", "sc:Enumeration",
+                 "cr:Label", "cr:Split", "cr:SegmentationMask"]
+
+
+@pytest.mark.parametrize("data_type", _NON_LOADABLE)
+def test_core_warns_where_mlcroissant_refuses_the_data_type(tmp_path, data_type):
+    """A field whose only dataType mlcroissant 1.1.1 cannot read: mlcroissant refuses the
+    document, core warns (the type is valid Croissant). With sc:Text next to it both
+    accept it."""
+    def doc_for(types):
+        avus = BASE_AVUS + [
+            _a("croissant.distribution.1.id", "f"),
+            _a("croissant.distribution.1.contentUrl", "f.csv"),
+            _a("croissant.distribution.1.md5", "d41d8cd98f00b204e9800998ecf8427e"),
+            _a("croissant.recordSet.1.id", "r"),
+            _a("croissant.recordSet.1.field.1.name", "a"),
+            _a("croissant.recordSet.1.field.1.source", "f"),
+            _a("croissant.recordSet.1.field.1.column", "a"),
+        ] + [_a(f"croissant.recordSet.1.field.1.dataType.{k}", t)
+             for k, t in enumerate(types, 1)]
+        return core.to_jsonld(avus, item={"path": "/iplant/home/shared/x", "name": "x",
+                                          "keyword_style": "text"})
+
+    alone = doc_for([data_type])
+    assert alone["validation"]["valid"]
+    assert any("mlcroissant 1.1.1" in w["message"] for w in alone["validation"]["warnings"])
+    errors, _ = _mlc_errors(alone["document"], tmp_path)
+    assert any("does not specify a valid" in e for e in errors), errors
+    paired = doc_for([data_type, "sc:Text"])
+    assert not any("mlcroissant 1.1.1" in w["message"]
+                   for w in paired["validation"]["warnings"])
+    assert _mlc_errors(paired["document"], tmp_path)[0] == []
+
+
+def _parquet_doc(tmp_path, columns, includes, table="t"):
+    """A document from from_schema-style typing of ``columns`` [(name, duckdb type)] read
+    from a FileSet with ``includes``; returns the path of metadata.json in tmp_path."""
+    fields = []
+    for name, ctype in columns:
+        fields.append(_field_model_like(name, core.duckdb_type_to_croissant(ctype), table))
+    model = {
+        "name": _leaves("T"), "description": _leaves("t"),
+        "license": [_leaves("https://creativecommons.org/licenses/by/4.0/")],
+        "creator": [{"name": _leaves("MESA"), "type": _leaves("Organization")}],
+        "datePublished": _leaves("2026-11-15"),
+        "isLiveDataset": _leaves("true"),
+        "distribution": [{"id": _leaves("fs"), "type": _leaves("FileSet"),
+                          "encodingFormat": _leaves("application/x-parquet"),
+                          "includes": [{"value": i, "unit": ""} for i in includes]}],
+        "recordSet": [{"id": _leaves(table), "field": fields}],
+    }
+    out = core.to_jsonld(core.model_to_avus(model),
+                         item={"path": "/iplant/home/shared/x", "name": "x",
+                               "keyword_style": "text"})
+    assert out["validation"]["errors"] == []
+    assert not any("mlcroissant 1.1.1" in w["message"] for w in out["validation"]["warnings"])
+    doc = out["document"]
+    for d in doc["distribution"]:
+        d.pop("contentUrl", None)
+    path = tmp_path / "metadata.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    return path
+
+
+def _field_model_like(name, typed, parent):
+    """What mesa_croissant_from_schema writes for one column (one level of subFields)."""
+    f = {"name": _leaves(name), "source": _leaves("fs"), "column": _leaves(name)}
+    if typed.get("dataTypes"):
+        f["dataType"] = [_leaves(t) for t in typed["dataTypes"]]
+    if typed["isArray"]:
+        f["isArray"] = _leaves("true")
+        f["arrayShape"] = _leaves(typed["arrayShape"])
+    if typed.get("subFields"):
+        f["subField"] = [
+            {"name": _leaves(s["name"]),
+             "dataType": [_leaves(t) for t in s["dataTypes"]],
+             "transformJsonPath": _leaves(s.get("transformJsonPath") or s["name"])}
+            for s in typed["subFields"]
+        ]
+    return f
+
+
+def _write_tables(pa, pq, root, layout):
+    """One table with the column kinds the NEON DuckLake has, written the way DuckDB
+    writes them (GEOMETRY as WKB, JSON as text, TIMESTAMPTZ in UTC, MAP, LIST), flat
+    (<t>/x.parquet) or hive-partitioned (<t>/k=a/x.parquet)."""
+    import datetime
+
+    wkb = bytes.fromhex("0101000000000000000000f03f0000000000000040")
+    tz = datetime.UTC
+    table = pa.table({
+        "id": pa.array([1, 2, 3], pa.int64()),
+        "props": pa.array([[("a", "1"), ("b", "2")], [], [("c", "3")]],
+                          pa.map_(pa.string(), pa.string())),
+        "geometry": pa.array([wkb, wkb, None], pa.binary()),
+        "doc": pa.array(['{"a": 1}', "[1, 2]", None], pa.string()),
+        "seen": pa.array([datetime.datetime(2024, 1, 1, 12, tzinfo=tz)] * 3,
+                         pa.timestamp("us", tz="UTC")),
+        "tags": pa.array([["x"], [], ["y", "z"]], pa.list_(pa.string())),
+    })
+    folder = root / "data" / "main" / "t"
+    if layout == "flat":
+        folder.mkdir(parents=True)
+        pq.write_table(table, folder / "ducklake-0001.parquet")
+    else:
+        for k, rows in (("a", [0, 1]), ("b", [2])):
+            (folder / f"k={k}").mkdir(parents=True)
+            pq.write_table(table.take(rows), folder / f"k={k}" / "ducklake-0001.parquet")
+
+
+_COLUMNS = [("id", "BIGINT"), ("props", "MAP(VARCHAR, VARCHAR)"), ("geometry", "GEOMETRY"),
+            ("doc", "JSON"), ("seen", "TIMESTAMP WITH TIME ZONE"), ("tags", "VARCHAR[]")]
+
+
+@pytest.mark.parametrize("layout", ["flat", "partitioned"])
+def test_suggested_ducklake_fileset_and_type_map_load_parquet_records(tmp_path, layout):
+    """suggest_distribution's includes find the files of an unpartitioned and of a
+    partitioned table once each, and the section-9 typing of MAP, GEOMETRY, JSON,
+    TIMESTAMPTZ and LIST columns loads their records."""
+    pa = pytest.importorskip("pyarrow")
+    pq = pytest.importorskip("pyarrow.parquet")
+    _write_tables(pa, pq, tmp_path, layout)
+    suggested = core.suggest_distribution([], lake={"catalog": "c.ducklake", "data": "data",
+                                                    "tables": ["main.t"]})
+    includes = [i["value"] for i in suggested[1]["includes"]]
+    assert includes == ["data/main/t/*.parquet", "data/main/t/**/*.parquet"]
+    path = _parquet_doc(tmp_path, _COLUMNS, includes)
+    records = sorted(mlc.Dataset(jsonld=str(path)).records("t"), key=lambda r: int(r["t/id"]))
+    assert [int(r["t/id"]) for r in records] == [1, 2, 3]
+    first = records[0]
+    assert [(m["t/props/key"], m["t/props/value"]) for m in first["t/props"]] == [
+        (b"a", b"1"), (b"b", b"2")]
+    assert first["t/geometry"] == bytes.fromhex("0101000000000000000000f03f0000000000000040")
+    assert first["t/doc"] == b'{"a": 1}'
+    assert str(first["t/seen"]).startswith("2024-01-01 12:00:00")
+    assert list(first["t/tags"]) == [b"x"]
+
+
+def test_recursive_glob_alone_misses_an_unpartitioned_table(tmp_path):
+    """Why the suggestion has two includes: mlcroissant matches with fnmatch, where
+    '<table>/**/*.parquet' needs a sub-folder."""
+    pa = pytest.importorskip("pyarrow")
+    pq = pytest.importorskip("pyarrow.parquet")
+    _write_tables(pa, pq, tmp_path, "flat")
+    path = _parquet_doc(tmp_path, [("id", "BIGINT")], ["data/main/t/**/*.parquet"])
+    assert list(mlc.Dataset(jsonld=str(path)).records("t")) == []
+
+
+# -- 1.3.1 pass 4: validate's mlcroissant warnings agree with mlcroissant ----------------------
+
+KONZ_AVUS = [  # subjects naming ENVO terms, and ENVO AVUs with free-text values
+    _a("datacite.subject.1.value", "Tallgrass prairie"),
+    _a("datacite.subject.2.value", "temperate grassland biome (ENVO:01000193)"),
+    _a("datacite.subject.3.value", "area of deciduous forest (ENVO:01000816)"),
+    _a("envo.area_of_deciduous_forest", "NLCD 2006 deciduousForest 3.27 km2 (9.5%)",
+       "ENVO:01000816"),
+    _a("envo.temperate_grassland_biome", "Tallgrass prairie", "ENVO:01000193"),
+]
+_SMALL_DIST = [
+    _a("croissant.distribution.1.id", "f"),
+    _a("croissant.distribution.1.contentUrl", "f.csv"),
+    _a("croissant.distribution.1.md5", "d41d8cd98f00b204e9800998ecf8427e"),
+]
+
+
+def _mlc_refuses(doc: dict, tmp_path) -> str | None:
+    """mlcroissant's error text, or None when it loads the document."""
+    path = tmp_path / "doc.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    try:
+        mlc.Dataset(jsonld=str(path))
+    except Exception as exc:  # ValidationError, or ValueError for the @context
+        return str(exc)
+    return None
+
+
+def test_defined_term_keyword_warning_matches_mlcroissant(tmp_path):
+    """The validate warning names what mlcroissant refuses; the text export (labels,
+    de-duplicated) loads."""
+    item = {"path": "/iplant/home/shared/x", "name": "x"}
+    out = core.to_jsonld(BASE_AVUS + _SMALL_DIST + KONZ_AVUS, item=item)
+    assert any(w["path"] == "keywords" for w in out["validation"]["warnings"])
+    errors, _ = _mlc_errors(out["document"], tmp_path)
+    assert errors and all(KNOWN["defined_term"].search(e) for e in errors)
+    text = core.to_jsonld(BASE_AVUS + _SMALL_DIST + KONZ_AVUS,
+                          item=dict(item, keyword_style="text"))
+    assert text["document"]["keywords"] == [
+        "Tallgrass prairie", "temperate grassland biome", "area of deciduous forest"]
+    assert not any(w["path"] == "keywords" for w in text["validation"]["warnings"])
+    assert _mlc_errors(text["document"], tmp_path)[0] == []
+
+
+def test_graph_document_validates_and_loads(tmp_path):
+    item = {"path": "/iplant/home/shared/x", "name": "x"}
+    doc = core.to_jsonld(BASE_AVUS + _SMALL_DIST, item=item)["document"]
+    graph = {"@context": doc["@context"],
+             "@graph": [{k: v for k, v in doc.items() if k != "@context"}]}
+    assert core.validate(graph)["valid"] is True
+    assert _mlc_refuses(graph, tmp_path) is None
+
+
+def test_context_and_http_schema_org_warnings_match_mlcroissant(tmp_path):
+    item = {"path": "/iplant/home/shared/x", "name": "x"}
+    doc = core.to_jsonld(BASE_AVUS + _SMALL_DIST, item=item)["document"]
+    assert _mlc_refuses(doc, tmp_path) is None
+    string_ctx = dict(doc, **{"@context": "https://schema.org/"})
+    assert any(w["path"] == "@context" for w in core.validate(string_ctx)["warnings"])
+    assert "@context should be a dictionary" in (_mlc_refuses(string_ctx, tmp_path) or "")
+    ctx = dict(doc["@context"], **{"@vocab": "http://schema.org/", "sc": "http://schema.org/"})
+    http = dict(doc, **{"@context": ctx})
+    assert any("http://schema.org/" in w["message"] for w in core.validate(http)["warnings"])
+    assert "https://schema.org/Dataset" in (_mlc_refuses(http, tmp_path) or "")
+
+
+def test_unmapped_extension_file_loads(tmp_path):
+    """A file whose extension has no known type gets application/octet-stream, which
+    mlcroissant accepts (it requires an encodingFormat)."""
+    for name in ("pyproject.toml", "data.weird"):
+        out = core.to_jsonld(BASE_AVUS, item={"path": f"/iplant/home/shared/x/{name}",
+                                              "name": name, "is_folder": False,
+                                              "md5": "d41d8cd98f00b204e9800998ecf8427e"})
+        assert out["validation"]["errors"] == []
+        assert _mlc_errors(out["document"], tmp_path)[0] == []
+
+
+def test_http_schema_org_warning_only_for_terms_in_use(tmp_path):
+    """An unused http://schema.org/ prefix in the @context loads and gives no warning; the
+    Dataset type named with it is refused and warned about (pass 5)."""
+    item = {"path": "/iplant/home/shared/x", "name": "x"}
+    doc = core.to_jsonld(BASE_AVUS + _SMALL_DIST, item=item)["document"]
+    unused = dict(doc, **{"@context": dict(doc["@context"], schema="http://schema.org/")})
+    assert not any("http://schema.org/" in w["message"]
+                   for w in core.validate(unused)["warnings"])
+    assert _mlc_refuses(unused, tmp_path) is None
+    typed = dict(unused, **{"@type": "schema:Dataset"})
+    assert any("for its Dataset type" in w["message"] for w in core.validate(typed)["warnings"])
+    assert "https://schema.org/Dataset" in (_mlc_refuses(typed, tmp_path) or "")
