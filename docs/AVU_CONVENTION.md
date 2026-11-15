@@ -50,7 +50,15 @@ are converted to their 1.1 forms).
    through these tools; `mesa_croissant_from_schema` warns about such a column.
 4. **Units are empty** unless this document gives them a meaning:
    - `croissant.keyword.N`: optional CURIE or IRI of the term (makes a `DefinedTerm`), the
-     same rule as MESA ontology AVUs (`unit = CURIE`).
+     same rule as MESA ontology AVUs (`unit = CURIE`). A keyword holds a name and one term
+     identifier: importing a `DefinedTerm` keeps its `name` and its `termCode` (else `url`,
+     else `@id`) and reports, with a warning, a `url` next to a `termCode` and an
+     `inDefinedTermSet` (there is no key for them; a sub-key of the repeatable
+     `croissant.keyword.N` would not follow its keyword when 1.3.0 readers renumber the
+     list). A document generated with `keyword_style="text"` (what mlcroissant 1.1.1 loads)
+     lists plain names, from these AVUs or the crosswalk (section 7): a `DefinedTerm`
+     becomes its name, and a name already listed (compared case-insensitively) is left
+     out, keeping the first spelling and the order.
    - `croissant.geo.spatialResolution`, `croissant.geo.temporalResolution`: unit text such as
      `m`, `km`, `s`, `day` (becomes `QuantitativeValue.unitText`).
    - `croissant.distribution.N.contentSize`: optional unit, default `B`.
@@ -189,7 +197,7 @@ On the dataset folder: `croissant.distribution.N.<sub>`.
 | `name` | both | defaults to `id` |
 | `description` | both | |
 | `contentUrl` | FileObject | absolute URL, or a path relative to the dataset root (`data/x.csv`), written as the plain path (`my dir/a b.csv`, not percent-encoded) |
-| `encodingFormat` | both | MIME type (`text/csv`, `application/x-parquet`, `image/tiff`) |
+| `encodingFormat` | both | MIME type (`text/csv`, `application/x-parquet`, `image/tiff`). When absent the generator takes the type of the `contentUrl` extension (a FileSet: of its first `includes` with a known extension), else `application/octet-stream`: mlcroissant requires an `encodingFormat` on every FileObject and FileSet |
 | `contentSize` | FileObject | number of bytes; unit optional (default `B`) |
 | `sha256` / `md5` | FileObject | hex digests |
 | `containedIn.M` | both | `id`s of the FileObject(s)/FileSet(s) containing this one |
@@ -214,7 +222,8 @@ that FileObject as their source.
 Importing a document **for a file** maps the FileObject that describes the file (the entry
 whose `@id` is the file's `@id`, else whose `contentUrl` is the file, else the only entry) to
 `croissant.file.*`: `description` and `sha256` always, `name` / `encodingFormat` / `md5` only
-when they differ from the file name / the format of its extension / the stat MD5. `@id`,
+when they differ from the file name / the format of its extension (`application/octet-stream`
+for an extension without a known type) / the stat MD5. `@id`,
 `contentUrl` and `contentSize` are generated and not stored; a field `source` naming the file
 is left out (fields default to it). Every other distribution entry is reported and dropped.
 
@@ -271,7 +280,7 @@ never copy these automatically; an editor may offer "copy into Croissant".
 | `datePublished` | `datacite.publicationYear`, `datacite.date.N` with `dateType=Issued`, `dc.date` |
 | `version` | `datacite.version` |
 | `identifier`, `url` | `datacite.identifier` with `identifierType=DOI` → `https://doi.org/<doi>` |
-| `keywords` | `datacite.subject.N.value`, then ontology AVUs (`<ontology>.<key>` whose unit is a CURIE) as `DefinedTerm`s |
+| `keywords` | `datacite.subject.N.value` in index order, then ontology AVUs (`<ontology>.<key>` whose unit is a CURIE) as `DefinedTerm`s (`termCode` = the unit). The term's `name` is its label when a subject names the term: its `classificationCode` or `valueURI` is the CURIE (or its OBO PURL `http://purl.obolibrary.org/obo/<PREFIX>_<id>`), or its value ends with `(<CURIE>)`, as in `area of deciduous forest (ENVO:01000816)` (label: the value without that suffix). That `DefinedTerm` then takes the subject's place in the list, so the term is not listed twice. Without such a subject the `name` is the AVU value, which may be free text: the attribute key is not used, since an editor that picks a sub-term keeps the parent field's key (`envo.biome` with a sub-term's label and CURIE). A term given by several AVUs is listed once |
 | `temporalCoverage` | `neon.temporalCoverage`, `datacite.date.N` with `dateType=Collected` |
 | `spatialCoverage` | `datacite.geoLocation.N.box` (`S,W,N,E` → `S W N E`), `datacite.geoLocation.N.point`, `datacite.geoLocation.N.place`; else the flat (legacy) `datacite.geoLocationBox`, `datacite.geoLocationPoint`, `datacite.geoLocationPlace` (the indexed keys take precedence) |
 | `prov:wasGeneratedBy` | `mesa.generated_by` (a URL becomes `{"@id": …}`) |

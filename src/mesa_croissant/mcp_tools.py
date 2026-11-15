@@ -256,6 +256,12 @@ def _generate(path: str, auth_value: AuthValue, url: str | None,
 
 
 # -- mesa_croissant_export -------------------------------------------------------------------------
+_KEYWORD_STYLE_DESCRIPTION = (
+    "defined_term (default, Croissant 1.1) writes ontology keywords as sc:DefinedTerm; "
+    "text writes plain names, which mlcroissant 1.1.1 requires to load the document."
+)
+
+
 class ExportInput(BaseModel):
     path: str = Field(..., description="iRODS path of the dataset folder or the file.")
     url: str | None = Field(
@@ -266,11 +272,7 @@ class ExportInput(BaseModel):
         ),
     )
     keyword_style: KeywordStyle = Field(
-        default="defined_term",
-        description=(
-            "defined_term (default, Croissant 1.1) writes ontology keywords as sc:DefinedTerm; "
-            "text writes plain names, which mlcroissant 1.1.1 requires to load the document."
-        ),
+        default="defined_term", description=_KEYWORD_STYLE_DESCRIPTION,
     )
 
 
@@ -316,6 +318,11 @@ class ValidateInput(BaseModel):
         default=None,
         description="Or: the iRODS path whose generated document is validated.",
     )
+    keyword_style: KeywordStyle = Field(
+        default="defined_term",
+        description=_KEYWORD_STYLE_DESCRIPTION + " Used with 'path' (the document is "
+        "generated as mesa_croissant_export would); ignored with 'document'.",
+    )
 
 
 class ValidateOutput(ValidationReport):
@@ -326,7 +333,9 @@ class ValidateOutput(ValidationReport):
 
 _MLCROISSANT_HINT = (
     "This is mesa-croissant's structural check. For the full MLCommons check run "
-    "`mlcroissant validate --jsonld <file>` (pip install mlcroissant)."
+    "`mlcroissant validate --jsonld <file>` (pip install mlcroissant). Warnings naming "
+    "mlcroissant 1.1.1 mark what it cannot load; for sc:DefinedTerm keywords export (or "
+    "validate a path) with keyword_style 'text'."
 )
 
 
@@ -351,7 +360,8 @@ async def handle_validate(
         report = core.validate(_document_arg(args.document))
         return {**report, "checked": "document", "path": None, "hint": _MLCROISSANT_HINT}
     auth = _require_auth(auth_value, VALIDATE)
-    norm, _target, generated, _count = _generate(str(args.path), auth, None, "defined_term")
+    norm, _target, generated, _count = _generate(str(args.path), auth, None,
+                                                 args.keyword_style)
     return {**generated["validation"], "checked": "path", "path": norm,
             "hint": _MLCROISSANT_HINT}
 

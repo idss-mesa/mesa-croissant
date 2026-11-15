@@ -2445,6 +2445,16 @@ class TestFromJsonld:
         ("a.txt", "text/plain"),
         ("README.md", "text/markdown"),
         ("a.pdf", "application/pdf"),
+        ("pyproject.toml", "application/toml"),
+        ("uv.lock", "text/plain"),
+        ("run.py", "text/x-python"),
+        ("q.sql", "application/sql"),
+        ("c.yaml", "application/yaml"),
+        ("c.yml", "application/yaml"),
+        ("nb.ipynb", "application/x-ipynb+json"),
+        ("fit.R", "text/x-rsrc"),
+        ("report.qmd", "text/markdown"),
+        ("CITATION.cff", "application/yaml"),
         ("https://h/x.csv?raw=1#frag", "text/csv"),
         ("noext", None),
         ("a.unknownext", None),
@@ -3408,3 +3418,276 @@ class TestJsonDepth:
         text = "[" * 64 + "]" * 64
         out = to_jsonld(base + [A("croissant.recordSet.1.data", text)], item=FOLDER)
         assert isinstance(out["document"]["recordSet"][0]["data"], list)
+
+
+# ---------------------------------------------------------------------------
+# 1.3.1 (pass 4): deferred findings of the live MCP test
+# ---------------------------------------------------------------------------
+
+KONZ = [  # the sites/KONZ subjects and ENVO AVUs (unit = CURIE, value = free text)
+    A("datacite.title.1.value", "KONZ"),
+    A("datacite.subject.1.value", "NEON"),
+    A("datacite.subject.2.value", "Tallgrass prairie"),
+    A("datacite.subject.3.subjectScheme", "ENVO"),
+    A("datacite.subject.3.value", "temperate grassland biome (ENVO:01000193)"),
+    A("datacite.subject.4.subjectScheme", "ENVO"),
+    A("datacite.subject.4.value", "area of deciduous forest (ENVO:01000816)"),
+    A("envo.area_of_deciduous_forest", "NLCD 2006 deciduousForest 3.27 km2 (9.5%)",
+      "ENVO:01000816"),
+    A("envo.temperate_grassland_biome", "Tallgrass prairie", "ENVO:01000193"),
+    A("envo.no_subject", "free text value", "ENVO:00000001"),
+]
+
+
+def DT(name, code):
+    return {"@type": "sc:DefinedTerm", "name": name, "termCode": code}
+
+
+class TestDeferredFindings:
+    # A: @graph
+    def graph_doc(self, *nodes):
+        return {"@context": copy.deepcopy(core.CONTEXT), "@graph": list(nodes)}
+
+    def node(self):
+        return {k: v for k, v in valid_doc().items() if k != "@context"}
+
+    def test_validate_unwraps_a_graph_like_from_jsonld(self):
+        doc = self.graph_doc({"@type": "sc:Organization", "name": "x"}, self.node())
+        assert validate(doc) == validate(valid_doc())
+        assert from_jsonld(doc) == from_jsonld(valid_doc())
+        assert validate(json.dumps(doc))["valid"] is True
+
+    def test_several_dataset_nodes_are_an_error(self):
+        doc = self.graph_doc(self.node(), dict(self.node(), name="Other"))
+        r = validate(doc)
+        assert r["valid"] is False
+        assert messages(r["errors"]) == [
+            ("@graph", "@graph holds 2 Dataset nodes; a Croissant document describes one "
+                       "dataset")]
+        assert from_jsonld(doc) == {"avus": [], "warnings": [], "errors": r["errors"]}
+
+    def test_graph_context_comes_from_the_document_or_the_node(self):
+        node = self.node()
+        r = validate({"@graph": [node]})
+        assert messages(r["errors"]) == [("@context", "@context is required")]
+        inner = dict(node, **{"@context": copy.deepcopy(core.CONTEXT)})
+        assert validate({"@graph": [inner]}) == validate(valid_doc())
+        assert validate(dict(valid_doc(), **{"@context": None}))["errors"][0]["path"] == \
+            "@context"
+
+    def test_graph_without_a_dataset_is_not_a_dataset(self):
+        doc = self.graph_doc({"@type": "sc:Organization", "name": "x"})
+        assert has_msg(validate(doc)["errors"], "@type", "sc:Dataset")
+        assert has_msg(from_jsonld(doc)["errors"], "@type", "not a schema.org Dataset")
+
+    # B: encodingFormat always present
+    def test_unmapped_file_extension_exports_octet_stream(self):
+        for name, fmt in (("pyproject.toml", "application/toml"),
+                          ("data.weird", "application/octet-stream"),
+                          ("LICENSE", "application/octet-stream")):
+            item = {"path": f"/iplant/home/shared/p/{name}", "name": name, "is_folder": False,
+                    "md5": "0" * 32}
+            out = to_jsonld(MINIMAL[:5], item=item)
+            fo = out["document"]["distribution"][0]
+            assert fo["encodingFormat"] == fmt
+            assert not has_msg(out["validation"]["errors"], None, "encodingFormat")
+            back = from_jsonld(out["document"], item=item)
+            assert back["errors"] == []
+            # the generated default is not stored
+            assert not any(a["attribute"] == "croissant.file.encodingFormat"
+                           for a in back["avus"])
+        item = {"path": "/iplant/home/shared/p/data.weird", "name": "data.weird",
+                "is_folder": False}
+        own = to_jsonld(MINIMAL[:5] + [A("croissant.file.encodingFormat", "text/x-weird")],
+                        item=item)
+        assert own["document"]["distribution"][0]["encodingFormat"] == "text/x-weird"
+        back = from_jsonld(own["document"], item=item)
+        assert A("croissant.file.encodingFormat", "text/x-weird") in back["avus"]
+
+    def test_distribution_entries_fall_back_to_octet_stream(self):
+        avus = MINIMAL[:5] + [
+            A("croissant.distribution.1.id", "blob"),
+            A("croissant.distribution.1.contentUrl", "blob.weird"),
+            A("croissant.distribution.1.md5", "0" * 32),
+            A("croissant.distribution.2.id", "bins"),
+            A("croissant.distribution.2.type", "FileSet"),
+            A("croissant.distribution.2.includes.1", "bins/*.weird"),
+            A("croissant.distribution.3.id", "cfg"),
+            A("croissant.distribution.3.contentUrl", "pyproject.toml"),
+            A("croissant.distribution.3.md5", "0" * 32),
+        ]
+        out = gen(avus)
+        assert [d["encodingFormat"] for d in out["document"]["distribution"]] == [
+            "application/octet-stream", "application/octet-stream", "application/toml"]
+        assert out["validation"]["valid"], out["validation"]["errors"]
+
+    # C: DefinedTerm keywords
+    def test_validate_warns_about_defined_term_keywords(self):
+        doc = valid_doc()
+        doc["keywords"] = ["soil", DT("grassland", "ENVO:00000106"), DT("x", "ENVO:1")]
+        r = validate(doc)
+        assert r["valid"] is True
+        kw = [m for m in r["warnings"] if m["path"] == "keywords"]
+        assert len(kw) == 1
+        assert "2 keyword(s)" in kw[0]["message"] and "keyword_style 'text'" in kw[0]["message"]
+        assert "mlcroissant 1.1.1" in kw[0]["message"]
+        doc["keywords"] = ["soil", "grassland"]
+        assert validate(doc)["warnings"] == []
+
+    # D: ontology keyword labels, text de-duplication
+    def test_ontology_keyword_takes_the_label_of_the_subject_naming_it(self):
+        cw = crosswalk(KONZ)["keywords"]
+        assert cw["value"] == [
+            "NEON",
+            "Tallgrass prairie",
+            DT("temperate grassland biome", "ENVO:01000193"),
+            DT("area of deciduous forest", "ENVO:01000816"),
+            DT("free text value", "ENVO:00000001"),  # no label: the value is kept
+        ]
+        assert cw["source"] == "datacite.subject.1.value+ontology"
+        assert triples(cw["avus"]) == [
+            ("croissant.keyword.1", "NEON", ""),
+            ("croissant.keyword.2", "Tallgrass prairie", ""),
+            ("croissant.keyword.3", "temperate grassland biome", "ENVO:01000193"),
+            ("croissant.keyword.4", "area of deciduous forest", "ENVO:01000816"),
+            ("croissant.keyword.5", "free text value", "ENVO:00000001"),
+        ]
+        text = to_jsonld(KONZ, item=dict(FOLDER, keyword_style="text"))["document"]
+        assert text["keywords"] == ["NEON", "Tallgrass prairie", "temperate grassland biome",
+                                    "area of deciduous forest", "free text value"]
+
+    def test_subject_names_a_term_by_code_or_iri(self):
+        avus = [
+            A("datacite.subject.1.value", "Grassland"),
+            A("datacite.subject.1.classificationCode", "ENVO:00000106"),
+            A("datacite.subject.2.value", "Soil"),
+            A("datacite.subject.2.valueURI", "http://purl.obolibrary.org/obo/ENVO_00001998"),
+            A("envo.grassland", "tallgrass", "ENVO:00000106"),
+            A("envo.soil", "loam", "ENVO:00001998"),
+            A("envo.biome", "prairie", "ENVO:00000428"),  # no subject names it
+            A("envo.other_grassland", "another value", "ENVO:00000106"),  # same term again
+        ]
+        assert crosswalk(avus)["keywords"]["value"] == [
+            DT("Grassland", "ENVO:00000106"),
+            DT("Soil", "ENVO:00001998"),
+            DT("prairie", "ENVO:00000428"),
+        ]
+
+    def test_subject_label_rules(self):
+        lab = core._subject_label
+        assert lab("area of deciduous forest (envo:01000816)", {}, "ENVO:01000816") == \
+            "area of deciduous forest"
+        assert lab("(ENVO:01000816)", {}, "ENVO:01000816") is None
+        assert lab("deciduous forest", {}, "ENVO:01000816") is None
+        assert lab("x (ENVO:1)", {}, "ENVO:10") is None
+        assert core._obo_iri("ENVO:01000816") == "http://purl.obolibrary.org/obo/ENVO_01000816"
+
+    def test_text_keywords_are_deduplicated_case_insensitively(self):
+        text_item = dict(FOLDER, keyword_style="text")
+        avus = MINIMAL + [
+            A("croissant.keyword.1", "Soil"),
+            A("croissant.keyword.2", "grassland", "ENVO:00000106"),
+            A("croissant.keyword.3", "soil"),
+            A("croissant.keyword.4", "GRASSLAND"),
+            A("croissant.keyword.5", "Water"),
+        ]
+        assert to_jsonld(avus, item=text_item)["document"]["keywords"] == \
+            ["Soil", "grassland", "Water"]
+        # the default style keeps every keyword
+        assert len(to_jsonld(avus, item=FOLDER)["document"]["keywords"]) == 5
+        cw = [A("datacite.title.1.value", "t"), A("datacite.subject.1.value", "Prairie"),
+              A("datacite.subject.2.value", "prairie"),
+              A("envo.temperate_grassland_biome", "PRAIRIE", "ENVO:01000193")]
+        assert to_jsonld(cw, item=text_item)["document"]["keywords"] == ["Prairie"]
+
+    # E: inDefinedTermSet
+    def test_import_reports_what_a_keyword_avu_cannot_hold(self):
+        doc = valid_doc()
+        doc["keywords"] = [
+            "NEON",
+            {"@type": "DefinedTerm", "name": "ecological observatory",
+             "termCode": "ENVO:01000253",
+             "inDefinedTermSet": "http://purl.obolibrary.org/obo/envo.owl"},
+            {"@type": "DefinedTerm", "name": "soil", "termCode": "ENVO:00001998",
+             "url": "http://purl.obolibrary.org/obo/ENVO_00001998"},
+        ]
+        out = from_jsonld(doc)
+        assert out["errors"] == []
+        assert messages(out["warnings"]) == [
+            ("keywords[1].inDefinedTermSet",
+             "the convention has no key for a keyword's term set; inDefinedTermSet dropped "
+             "(the name and the term identifier are kept)"),
+            ("keywords[2].url",
+             "a keyword AVU keeps one term identifier: termCode is kept, url dropped"),
+        ]
+        kws = [a for a in out["avus"] if a["attribute"].startswith("croissant.keyword")]
+        assert triples(kws) == [
+            ("croissant.keyword.1", "NEON", ""),
+            ("croissant.keyword.2", "ecological observatory", "ENVO:01000253"),
+            ("croissant.keyword.3", "soil", "ENVO:00001998"),
+        ]
+        # round trip: everything but the reported parts comes back
+        again = to_jsonld(out["avus"], item=FOLDER)["document"]["keywords"]
+        assert again == ["NEON", DT("ecological observatory", "ENVO:01000253"),
+                         DT("soil", "ENVO:00001998")]
+        assert from_jsonld(to_jsonld(out["avus"], item=FOLDER)["document"])["warnings"] == []
+
+    # F, G: what mlcroissant 1.1.1 refuses
+    def test_context_that_is_not_an_object_is_a_warning(self):
+        for ctx in ("https://schema.org/", [copy.deepcopy(core.CONTEXT)]):
+            doc = dict(valid_doc(), **{"@context": ctx})
+            r = validate(doc)
+            assert r["valid"] is True
+            assert has_msg(r["warnings"], "@context", "should be an object")
+        assert not has_msg(validate(valid_doc())["warnings"], "@context")
+
+    def test_http_schema_org_is_a_warning(self):
+        ctx = dict(core.CONTEXT, **{"@vocab": "http://schema.org/", "sc": "http://schema.org/"})
+        cases = [
+            dict(valid_doc(), **{"@context": ctx}),
+            dict(valid_doc(), **{"@context": dict(core.CONTEXT, sc="http://schema.org/")}),
+            dict(valid_doc(), **{"@type": "http://schema.org/Dataset"}),
+        ]
+        for doc in cases:
+            r = validate(doc)
+            assert r["valid"] is True, r["errors"]
+            assert has_msg(r["warnings"], "@context", "http://schema.org/")
+            assert has_msg(r["warnings"], "@context", "Validating with mlcroissant")
+
+    # 1.3.0 AVUs
+    def test_croissant_avus_from_1_3_0_parse_and_export_unchanged(self):
+        """croissant.* AVUs as 1.3.0 wrote them (keywords with and without units, files with
+        a known extension or an explicit encodingFormat) give the 1.3.0 document; only the
+        validation gains the DefinedTerm warning."""
+        avus = MINIMAL[:5] + [
+            A("croissant.keyword.1", "soil", "ENVO:00001998"),
+            A("croissant.keyword.2", "Soil"),
+            A("croissant.keyword.3", "biome", "http://purl.obolibrary.org/obo/ENVO_00000428"),
+            A("croissant.distribution.1.id", "ratings-csv"),
+            A("croissant.distribution.1.contentUrl", "ratings.csv"),
+            A("croissant.distribution.1.md5", "0" * 32),
+            A("croissant.distribution.2.id", "notes"),
+            A("croissant.distribution.2.contentUrl", "notes.bin"),
+            A("croissant.distribution.2.encodingFormat", "application/x-notes"),
+            A("croissant.distribution.2.md5", "1" * 32),
+        ]
+        parsed = parse_avus(avus)
+        assert parsed["warnings"] == [] and parsed["unknown"] == []
+        assert triples(model_to_avus(parsed["model"])) == triples(avus)
+        out = gen(avus)
+        doc = out["document"]
+        assert doc["keywords"] == [
+            DT("soil", "ENVO:00001998"), "Soil",
+            {"@type": "sc:DefinedTerm", "name": "biome",
+             "url": "http://purl.obolibrary.org/obo/ENVO_00000428"}]
+        assert [(d["@id"], d["encodingFormat"]) for d in doc["distribution"]] == [
+            ("ratings-csv", "text/csv"), ("notes", "application/x-notes")]
+        assert out["validation"]["valid"] is True
+        assert [m["path"] for m in out["validation"]["warnings"]] == ["keywords"]
+        back = from_jsonld(doc, content_base=core._content_base(FOLDER))
+        assert back["errors"] == [] and back["warnings"] == []
+        # import writes the generated url and the guessed encodingFormat, as 1.3.0 did
+        assert set(triples(back["avus"])) - set(triples(avus)) == {
+            ("croissant.url", doc["url"], ""),
+            ("croissant.distribution.1.encodingFormat", "text/csv", "")}
+        assert set(triples(avus)) <= set(triples(back["avus"]))

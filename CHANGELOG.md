@@ -86,6 +86,50 @@ parse and export (tests).
   (`a ` next to `a`: `a` keeps `t/a`) and a column name with `/` equal to a member path
   (`s_t/a` keeps `t/s_t/a`).
 
+### Validator, keywords and encoding formats (pass 4)
+
+The deferred findings of the live test. Convention version 1 is unchanged, and `croissant.*`
+AVUs written by 1.3.0 parse and export as before (test); the changes below are in what the
+crosswalk and the generator derive and in validator warnings.
+
+- **`@graph` documents.** `validate` reads the Dataset node of a top-level `@graph` exactly as
+  `from_jsonld` does (one shared function): the live test's wrapped document had 8 errors in
+  `validate` and imported cleanly. More than one Dataset node is now an error at `@graph` in
+  both (`from_jsonld` silently took the first).
+- **`encodingFormat` on every FileObject and FileSet.** Unknown extensions fall back to
+  `application/octet-stream` (a file's own FileObject and distribution entries without
+  `croissant.*.encodingFormat`); `pyproject.toml` exported without it, which mlcroissant
+  refuses. The extension table gains text, code and configuration types: `toml`
+  `application/toml`, `sql` `application/sql`, `js` `text/javascript`, `py` `text/x-python`,
+  `ipynb` `application/x-ipynb+json`, `r` `text/x-rsrc`, `rmd` / `qmd` `text/markdown`, `cff`
+  `application/yaml`, `lock` / `log` / `ini` / `cfg` / `conf` `text/plain`, and `jl`, `sh`,
+  `css`, `c` / `h` / `cpp`, `java`, `rst`, `tex`, `bib`, `docx`, `pptx`, `rdf`, `owl`, `nt`,
+  `nq`, `gml`, `kmz`, `csl` (IANA types where registered, else Python's `mimetypes` /
+  shared-mime-info). `encoding_format_for` still returns `None` for an unknown extension;
+  import leaves out an `application/octet-stream` that is only that default.
+- **mlcroissant warnings in `validate`** (warnings, not errors; the README and DESIGN list
+  them): `sc:DefinedTerm` keywords (with the hint to use `keyword_style` `text`), an
+  `@context` that is not an object (mlcroissant refuses a string or list), and documents using
+  `http://schema.org/`.
+- **`mesa_croissant_validate` takes `keyword_style`** (values, default and description as in
+  export) for a `path`; it always validated the DefinedTerm document, so a folder mlcroissant
+  rejects was reported valid without a hint. The hint names `keyword_style`.
+- **Ontology keyword names.** An ontology AVU's `DefinedTerm` is named by the term's label when
+  a `datacite.subject.N` names the term (its `classificationCode` or `valueURI` is the CURIE
+  or its OBO PURL, or its value ends with `(<CURIE>)`), and takes that subject's place, so
+  the term is no longer listed twice. Otherwise the AVU value stays the name (an editor that
+  picks a sub-term keeps the parent field's key, so the attribute key is not a label). On
+  sites/KONZ, `NLCD 2006 deciduousForest 3.27 km2 (9.5%)` becomes `area of deciduous forest`.
+  A term given by several AVUs is listed once. The crosswalk's suggested `croissant.keyword`
+  AVUs carry the same names.
+- **Text keywords are de-duplicated.** With `keyword_style` `text`, a name already listed
+  (compared case-insensitively) is left out, keeping the first spelling and the order (KONZ
+  listed `Tallgrass prairie` twice).
+- **Import reports what a keyword AVU cannot hold.** A `DefinedTerm`'s `inDefinedTermSet`,
+  and its `url` next to a `termCode`, are dropped with a warning (they were dropped silently,
+  against the `from_jsonld` docstring). No key was added: a sub-key of the repeatable
+  `croissant.keyword.N` would stay at its old index when a 1.3.0 reader renumbers the keywords.
+
 ## 1.3.0 (2026-11-08)
 
 - `croissant.*` AVU convention version 1, the pure-stdlib core (codec, generator, crosswalk,

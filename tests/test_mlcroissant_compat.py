@@ -10,6 +10,8 @@ Known mlcroissant 1.1.1 behaviour, accepted here:
 * ``keywords`` given as ``sc:DefinedTerm`` objects are rejected (mlcroissant types
   ``keywords`` as text), although Croissant 1.1 allows DefinedTerm. Documents built
   with ``item["keyword_style"] = "text"`` load without that error.
+* An ``@context`` that is not an object, and ``http://schema.org/`` documents, are refused.
+  ``core.validate`` warns about these three (tests at the end).
 * A FileObject without ``sha256``/``md5`` is an error unless ``isLiveDataset``.
 * Warnings it always prints: the context differs from its own (``path``,
   ``repeated``, ``replace``, ``samplingRate`` are not in the Croissant 1.1 context),
@@ -460,3 +462,80 @@ def test_recursive_glob_alone_misses_an_unpartitioned_table(tmp_path):
     _write_tables(pa, pq, tmp_path, "flat")
     path = _parquet_doc(tmp_path, [("id", "BIGINT")], ["data/main/t/**/*.parquet"])
     assert list(mlc.Dataset(jsonld=str(path)).records("t")) == []
+
+
+# -- 1.3.1 pass 4: validate's mlcroissant warnings agree with mlcroissant ----------------------
+
+KONZ_AVUS = [  # subjects naming ENVO terms, and ENVO AVUs with free-text values
+    _a("datacite.subject.1.value", "Tallgrass prairie"),
+    _a("datacite.subject.2.value", "temperate grassland biome (ENVO:01000193)"),
+    _a("datacite.subject.3.value", "area of deciduous forest (ENVO:01000816)"),
+    _a("envo.area_of_deciduous_forest", "NLCD 2006 deciduousForest 3.27 km2 (9.5%)",
+       "ENVO:01000816"),
+    _a("envo.temperate_grassland_biome", "Tallgrass prairie", "ENVO:01000193"),
+]
+_SMALL_DIST = [
+    _a("croissant.distribution.1.id", "f"),
+    _a("croissant.distribution.1.contentUrl", "f.csv"),
+    _a("croissant.distribution.1.md5", "d41d8cd98f00b204e9800998ecf8427e"),
+]
+
+
+def _mlc_refuses(doc: dict, tmp_path) -> str | None:
+    """mlcroissant's error text, or None when it loads the document."""
+    path = tmp_path / "doc.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    try:
+        mlc.Dataset(jsonld=str(path))
+    except Exception as exc:  # ValidationError, or ValueError for the @context
+        return str(exc)
+    return None
+
+
+def test_defined_term_keyword_warning_matches_mlcroissant(tmp_path):
+    """The validate warning names what mlcroissant refuses; the text export (labels,
+    de-duplicated) loads."""
+    item = {"path": "/iplant/home/shared/x", "name": "x"}
+    out = core.to_jsonld(BASE_AVUS + _SMALL_DIST + KONZ_AVUS, item=item)
+    assert any(w["path"] == "keywords" for w in out["validation"]["warnings"])
+    errors, _ = _mlc_errors(out["document"], tmp_path)
+    assert errors and all(KNOWN["defined_term"].search(e) for e in errors)
+    text = core.to_jsonld(BASE_AVUS + _SMALL_DIST + KONZ_AVUS,
+                          item=dict(item, keyword_style="text"))
+    assert text["document"]["keywords"] == [
+        "Tallgrass prairie", "temperate grassland biome", "area of deciduous forest"]
+    assert not any(w["path"] == "keywords" for w in text["validation"]["warnings"])
+    assert _mlc_errors(text["document"], tmp_path)[0] == []
+
+
+def test_graph_document_validates_and_loads(tmp_path):
+    item = {"path": "/iplant/home/shared/x", "name": "x"}
+    doc = core.to_jsonld(BASE_AVUS + _SMALL_DIST, item=item)["document"]
+    graph = {"@context": doc["@context"],
+             "@graph": [{k: v for k, v in doc.items() if k != "@context"}]}
+    assert core.validate(graph)["valid"] is True
+    assert _mlc_refuses(graph, tmp_path) is None
+
+
+def test_context_and_http_schema_org_warnings_match_mlcroissant(tmp_path):
+    item = {"path": "/iplant/home/shared/x", "name": "x"}
+    doc = core.to_jsonld(BASE_AVUS + _SMALL_DIST, item=item)["document"]
+    assert _mlc_refuses(doc, tmp_path) is None
+    string_ctx = dict(doc, **{"@context": "https://schema.org/"})
+    assert any(w["path"] == "@context" for w in core.validate(string_ctx)["warnings"])
+    assert "@context should be a dictionary" in (_mlc_refuses(string_ctx, tmp_path) or "")
+    ctx = dict(doc["@context"], **{"@vocab": "http://schema.org/", "sc": "http://schema.org/"})
+    http = dict(doc, **{"@context": ctx})
+    assert any("http://schema.org/" in w["message"] for w in core.validate(http)["warnings"])
+    assert "https://schema.org/Dataset" in (_mlc_refuses(http, tmp_path) or "")
+
+
+def test_unmapped_extension_file_loads(tmp_path):
+    """A file whose extension has no known type gets application/octet-stream, which
+    mlcroissant accepts (it requires an encodingFormat)."""
+    for name in ("pyproject.toml", "data.weird"):
+        out = core.to_jsonld(BASE_AVUS, item={"path": f"/iplant/home/shared/x/{name}",
+                                              "name": name, "is_folder": False,
+                                              "md5": "d41d8cd98f00b204e9800998ecf8427e"})
+        assert out["validation"]["errors"] == []
+        assert _mlc_errors(out["document"], tmp_path)[0] == []

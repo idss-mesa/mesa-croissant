@@ -263,6 +263,56 @@ def test_validate_path(irods) -> None:
     assert any(e["path"] == "datePublished" for e in res["errors"])
 
 
+def test_validate_path_keyword_style(irods) -> None:
+    """keyword_style applies to the document generated for a path, as in export: the
+    default (DefinedTerm keywords) gets the mlcroissant warning, text does not."""
+    irods(GOLDEN["avus"])
+    res = run(mt.handle_validate(mt.ValidateInput(path=FOLDER), auth_value=AUTH))
+    assert res["valid"] is True
+    assert any(w["path"] == "keywords" and "keyword_style 'text'" in w["message"]
+               for w in res["warnings"])
+    res = run(mt.handle_validate(mt.ValidateInput(path=FOLDER, keyword_style="text"),
+                                 auth_value=AUTH))
+    mt.ValidateOutput.model_validate(res)
+    assert res["valid"] is True and res["checked"] == "path"
+    assert not any(w["path"] == "keywords" for w in res["warnings"])
+    assert "keyword_style 'text'" in res["hint"]
+    schema = mt.ValidateInput.model_json_schema()["properties"]["keyword_style"]
+    export = mt.ExportInput.model_json_schema()["properties"]["keyword_style"]
+    assert schema["default"] == export["default"] == "defined_term"
+    assert schema["enum"] == export["enum"] == ["defined_term", "text"]
+    assert schema["description"].startswith(export["description"])
+    with pytest.raises(ValueError):
+        mt.ValidateInput(path=FOLDER, keyword_style="plain")
+
+
+def test_validate_document_graph_and_mlcroissant_warnings() -> None:
+    """A @graph document is validated on its Dataset node, as apply imports it; several
+    Dataset nodes are an error. A string @context and http://schema.org are warnings."""
+    node = {k: v for k, v in GOLDEN["document"].items() if k != "@context"}
+    graph = {"@context": GOLDEN["document"]["@context"], "@graph": [node]}
+    res = run(mt.handle_validate(mt.ValidateInput(document=graph)))
+    flat = run(mt.handle_validate(mt.ValidateInput(document=GOLDEN["document"])))
+    assert res["valid"] is True and res["errors"] == []
+    assert {k: res[k] for k in ("warnings", "summary", "conformsTo")} == \
+        {k: flat[k] for k in ("warnings", "summary", "conformsTo")}
+    two = {**graph, "@graph": [node, {**node, "@id": "other"}]}
+    res = run(mt.handle_validate(mt.ValidateInput(document=two)))
+    assert res["valid"] is False
+    assert [e["path"] for e in res["errors"]] == ["@graph"]
+    assert "2 Dataset nodes" in res["errors"][0]["message"]
+    doc = {**GOLDEN["document"], "@context": "https://schema.org/"}
+    res = run(mt.handle_validate(mt.ValidateInput(document=doc)))
+    assert any(w["path"] == "@context" and "should be an object" in w["message"]
+               for w in res["warnings"])
+    ctx = {**GOLDEN["document"]["@context"], "@vocab": "http://schema.org/",
+           "sc": "http://schema.org/"}
+    res = run(mt.handle_validate(mt.ValidateInput(document={**GOLDEN["document"],
+                                                            "@context": ctx})))
+    assert res["valid"] is True
+    assert any("http://schema.org/" in w["message"] for w in res["warnings"])
+
+
 def test_validate_needs_exactly_one_input() -> None:
     for args in ({}, {"document": {}, "path": FOLDER}):
         with pytest.raises(ToolError) as exc:
@@ -1088,7 +1138,9 @@ def test_from_schema_map_geometry_and_spatial_columns() -> None:
     base = [a for a in GOLDEN["avus"] if not a["attribute"].startswith("croissant.recordSet.")]
     out = core.to_jsonld(base + res["avus"], item=GOLDEN["item"])
     assert out["validation"]["valid"] is True, out["validation"]["errors"]
-    assert not any("mlcroissant 1.1.1" in w["message"] for w in out["validation"]["warnings"])
+    # (the golden item's DefinedTerm keywords have their own mlcroissant warning)
+    assert not any("mlcroissant 1.1.1" in w["message"] for w in out["validation"]["warnings"]
+                   if w["path"] != "keywords")
     fields = out["document"]["recordSet"][0]["field"]
     assert fields[1]["dataType"] == ["sc:GeoShape", "sc:Text"]
     assert fields[0]["subField"][1]["source"]["transform"] == {"jsonPath": "$[1]"}

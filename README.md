@@ -29,7 +29,7 @@ documents are accepted on import.
 |---|---|---|
 | `mesa_croissant_template` | `{level}`: `dataset`, `rai`, `geo`, `file`, `distribution`, `recordset` or `all` | Returns the key catalog: attribute, cardinality, required, unit, description. |
 | `mesa_croissant_export` | `{path, url?, keyword_style?}` | Reads the item's AVUs (and a file's stat size and MD5), runs `to_jsonld` and returns `{document, sources, validation, croissant_avu_count}`. |
-| `mesa_croissant_validate` | `{document}` or `{path}` | Returns the `validate` report. |
+| `mesa_croissant_validate` | `{document}` or `{path, keyword_style?}` | Returns the `validate` report. A `path` is validated on the document export would generate with the same `keyword_style`. |
 | `mesa_croissant_apply` | `{path, document? \| avus?, mode: merge\|replace, drop_unknown=false, dry_run=true, content_base?}` | Imports the document (or takes the AVUs, which must use canonical keys), diffs the new AVUs against the item's `croissant.*` AVUs and returns `{add, remove, unchanged}` with the validation of the resulting document. Unless `dry_run`, writes the diff and mirrors it into the DuckLake AVU history as one snapshot. |
 | `mesa_croissant_from_schema` | `{columns: [{name, type}], record_set_id, source_id, record_set_index=1, record_set_name?, description?}` | Builds record-set AVUs from a DuckDB or Arrow schema (at most 1,249 columns and 5,000 AVUs, one apply call). STRUCT members get `transformJsonPath` = the member name (`$['…']` unless a plain identifier), so mlcroissant loads them; a member that is itself a STRUCT is typed `sc:Text` without one. `column` keeps the exact column name; a name with whitespace gets a unique explicit `id`. Writes nothing. |
 
@@ -204,9 +204,10 @@ Known mlcroissant 1.1.1 differences (see `tests/test_mlcroissant_compat.py`):
 
 - **Keywords.** mlcroissant rejects keywords written as `sc:DefinedTerm`, although Croissant
   1.1 allows them. The crosswalk turns ontology AVUs into DefinedTerm keywords, so most MESA
-  datasets have them. Export with `keyword_style="text"` (`item["keyword_style"]` in
-  `to_jsonld`, or the `keyword_style` input of `mesa_croissant_export`) to get plain keyword
-  names that mlcroissant loads.
+  datasets have them, and `core.validate` warns about them. Export with
+  `keyword_style="text"` (`item["keyword_style"]` in `to_jsonld`, or the `keyword_style` input
+  of `mesa_croissant_export` and of `mesa_croissant_validate` with a `path`) to get plain
+  keyword names that mlcroissant loads (a name repeated in another case is listed once).
 - **Checksums.** mlcroissant requires `md5` or `sha256` on every FileObject unless
   `isLiveDataset` is true. For a file, the export takes the MD5 from the Data Store stat
   (`sha2:` checksums are not used yet). For distribution entries, add
@@ -235,7 +236,15 @@ Known mlcroissant 1.1.1 differences (see `tests/test_mlcroissant_compat.py`):
   `<table>/**/*.parquet`; a file matching both is read once.
 - **schema.org.** Documents use `https://schema.org/`, as every upstream example does.
   mlcroissant 1.1.1 does not find the Dataset in a document that uses `http://`. Import
-  accepts both.
+  accepts both; `core.validate` warns about `http://`.
+- **`@context`.** mlcroissant requires an object; a string or list `@context` (valid
+  JSON-LD) is refused. `core.validate` warns.
+- **`@graph`.** A document whose top level is a `@graph` holding one Dataset node loads in
+  mlcroissant, and `core.validate` and `from_jsonld` read that node (several Dataset nodes
+  are an error).
+- **`encodingFormat`.** mlcroissant requires it on every FileObject and FileSet. The
+  generator takes it from the file extension and writes `application/octet-stream` for an
+  extension without a known type.
 - **Warnings.** mlcroissant warns about a missing `citeAs` and `version`, and about context
   terms it adds itself (`path`, `repeated`, `replace`, `samplingRate`).
 

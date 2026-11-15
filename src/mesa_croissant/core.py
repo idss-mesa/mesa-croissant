@@ -1053,6 +1053,37 @@ def _ontology_terms(ix: _AvuIndex) -> list[tuple[str, str, str]]:
     return terms
 
 
+def _obo_iri(curie: str) -> str | None:
+    """``ENVO:01000816`` -> ``http://purl.obolibrary.org/obo/ENVO_01000816``."""
+    pfx, _, local = curie.partition(":")
+    return f"http://purl.obolibrary.org/obo/{pfx}_{local}" if pfx and local else None
+
+
+def _subject_label(value: str, entry: dict[str, tuple[str, str]], unit: str) -> str | None:
+    """The term label a ``datacite.subject.N`` entry gives for the term ``unit``, or None.
+
+    The subject names the term when its ``classificationCode`` or ``valueURI`` is the
+    term (its CURIE, IRI or OBO PURL), or when its value ends with ``(<CURIE>)``, as MESA
+    writes ontology subjects (``area of deciduous forest (ENVO:01000816)``); the label is
+    the value without that suffix.
+    """
+    unit = unit.strip()
+    ids = {unit.lower()}
+    obo = _obo_iri(unit) if _is_curie(unit) and not _is_url(unit) else None
+    if obo:
+        ids.add(obo.lower())
+    for sub in ("classificationCode", "valueURI"):
+        hit = _pick(entry, sub)
+        if hit and hit[0].strip().lower() in ids:
+            return value.strip()
+    suffix = f"({unit})"
+    text = value.strip()
+    if text.lower().endswith(suffix.lower()):
+        label = text[:-len(suffix)].strip()
+        return label or None
+    return None
+
+
 def _place_jsonld(name: str | None, box: list[str] | None,
                   point: list[str] | None) -> dict[str, Any]:
     place: dict[str, Any] = {"@type": "sc:Place"}
@@ -1237,27 +1268,53 @@ def crosswalk(avus: Iterable[Any]) -> dict[str, dict[str, Any]]:
             put("identifier", url, ident[1], {"identifier": _leaf(url)})
             put("url", url, ident[1], {"url": _leaf(url)})
 
-    # keywords
-    kws: list[Any] = []
-    kw_model: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    srcs: list[str] = []
+    # keywords: the subjects in order, an ontology term in place of the subject that names
+    # it (the subject gives the term's label), then the other ontology terms
+    subjects: list[list[Any]] = []  # [value, attribute, entry, (label, unit) | None]
+    seen_subjects: set[str] = set()
     for _i, entry in ix.family("subject"):
         hit = _pick(entry, "value", "subject", "")
-        if hit and (hit[0], "") not in seen:
-            seen.add((hit[0], ""))
-            kws.append(hit[0])
-            kw_model.append(_leaf(hit[0]))
-            if not srcs:
-                srcs.append(hit[1])
+        if hit and hit[0] not in seen_subjects:
+            seen_subjects.add(hit[0])
+            subjects.append([hit[0], hit[1], entry, None])
+    trailing: list[tuple[str, str]] = []
+    seen_terms: set[tuple[str, str]] = set()
+    labelled: set[str] = set()  # units whose label a subject gave
     for value, unit, _attr in _ontology_terms(ix):
-        if (value, unit) in seen:
+        if unit in labelled:
+            continue  # the same term again
+        term = (value, unit)
+        named = None
+        for subj in subjects:
+            label = _subject_label(subj[0], subj[2], unit) if subj[3] is None else None
+            if label is not None:
+                named, term = subj, (label, unit)
+                break
+        if term in seen_terms:
             continue
-        seen.add((value, unit))
-        kws.append({"@type": "sc:DefinedTerm", "name": value, "termCode": unit})
-        kw_model.append(_leaf(value, unit))
-        if "ontology" not in srcs:
-            srcs.append("ontology")
+        seen_terms.add(term)
+        if named is not None:
+            named[3] = term
+            labelled.add(unit)
+        else:
+            trailing.append(term)
+    kws: list[Any] = []
+    kw_model: list[dict[str, str]] = []
+    srcs: list[str] = []
+    for value, attr, _entry, term in subjects:
+        if term is None:
+            kws.append(value)
+            kw_model.append(_leaf(value))
+        else:
+            kws.append({"@type": "sc:DefinedTerm", "name": term[0], "termCode": term[1]})
+            kw_model.append(_leaf(*term))
+        if not srcs:
+            srcs.append(attr)
+    for name, unit in trailing:
+        kws.append({"@type": "sc:DefinedTerm", "name": name, "termCode": unit})
+        kw_model.append(_leaf(name, unit))
+    if any(isinstance(k, Mapping) for k in kws):
+        srcs.append("ontology")
     if kws:
         put("keywords", kws, "+".join(srcs), {"keyword": kw_model})
 
@@ -1380,6 +1437,21 @@ def _keyword_jsonld(leaf: dict[str, str], warnings: list, path: str,
     if not _is_curie(unit):
         warnings.append(_msg(path, "keyword unit should be a CURIE or IRI"))
     return {"@type": "sc:DefinedTerm", "name": value, "termCode": unit}
+
+
+def _text_keywords(kws: list) -> list[str]:
+    """Plain keyword names (``keyword_style="text"``): a DefinedTerm becomes its name, and a
+    name already given (compared case-insensitively) is left out; the first spelling and
+    the order are kept."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for k in kws:
+        name = k.get("name") if isinstance(k, Mapping) else k
+        if not isinstance(name, str) or name.casefold() in seen:
+            continue
+        seen.add(name.casefold())
+        out.append(name)
+    return out
 
 
 def _field_id(field: Mapping, parent_id: str) -> str | None:
@@ -1554,9 +1626,8 @@ def _distribution_jsonld(entry: Mapping, base: str, warnings: list,
                 guess = encoding_format_for(inc)
                 if guess:
                     break
-        fmt = guess
-    if fmt is not None:
-        out["encodingFormat"] = fmt
+        fmt = guess or _DEFAULT_ENCODING
+    out["encodingFormat"] = fmt
     size_leaf = _as_leaf(entry.get("contentSize"))
     if size_leaf and not is_set:
         out["contentSize"] = f"{size_leaf['value']} {size_leaf['unit'] or 'B'}"
@@ -1608,7 +1679,8 @@ def to_jsonld(avus: Iterable[Any], *, item: Mapping[str, Any]) -> dict[str, Any]
     resolved against: the dataset folder, or a file's parent folder), ``size``,
     ``md5``, ``doi``; optional extras: ``public`` (bool, picks ``dav-anon`` over
     ``dav`` when ``content_base`` is absent) and ``keyword_style`` (``"text"`` emits
-    DefinedTerm keywords as plain names, which mlcroissant 1.1.1 requires).
+    DefinedTerm keywords as plain names, which mlcroissant 1.1.1 requires, each name once
+    compared case-insensitively).
 
     Returns ``{"document": dict, "sources": {property: source}, "validation":
     validate(document) + AVU warnings}``. A source is ``"croissant"``, the AVU the
@@ -1716,14 +1788,13 @@ def to_jsonld(avus: Iterable[Any], *, item: Mapping[str, Any]) -> dict[str, Any]
 
     kw_leaves = [lf for lf in (_as_leaf(k) for k in _as_list(m.get("keyword"))) if lf]
     if kw_leaves:
-        take("keywords", [
-            _keyword_jsonld(lf, warnings, f"croissant.keyword.{i}", style)
-            for i, lf in enumerate(kw_leaves, 1)
-        ], "croissant")
+        kws = [_keyword_jsonld(lf, warnings, f"croissant.keyword.{i}", style)
+               for i, lf in enumerate(kw_leaves, 1)]
+        take("keywords", _text_keywords(kws) if style == "text" else kws, "croissant")
     elif "keywords" in cw:
         kws = cw["keywords"]["value"]
         if style == "text":
-            kws = [k["name"] if isinstance(k, Mapping) else k for k in kws]
+            kws = _text_keywords(kws)
         take("keywords", kws, cw["keywords"]["source"])
 
     for prop in ("inLanguage", "sameAs"):
@@ -1820,9 +1891,8 @@ def to_jsonld(avus: Iterable[Any], *, item: Mapping[str, Any]) -> dict[str, Any]
         if desc is not None:
             fo["description"] = desc
         fo["contentUrl"] = _resolve_url(fname, base)
-        fmt = _lv(fm.get("encodingFormat")) or encoding_format_for(fname)
-        if fmt:
-            fo["encodingFormat"] = fmt
+        fo["encodingFormat"] = (_lv(fm.get("encodingFormat")) or encoding_format_for(fname)
+                                or _DEFAULT_ENCODING)
         if item.get("size") not in (None, ""):
             fo["contentSize"] = f"{_text(item['size'])} B"
         sha = _lv(fm.get("sha256"))
@@ -1969,6 +2039,25 @@ def _ref_id(value: Any) -> str | None:
             if key in nv:
                 return _ref_id(nv[key])
     return None
+
+
+def _graph_dataset(doc: Any) -> tuple[Any, str | None]:
+    """The Dataset node of a ``@graph`` document (with the document's ``@context``).
+
+    A document that is not a top-level Dataset but has a ``@graph`` is searched for its
+    ``Dataset`` node: one node is returned with the outer ``@context`` (its own
+    ``@context`` wins); several are an error message (``(doc, message)``); none leaves
+    the document as it is. Shared by :func:`from_jsonld` and :func:`validate`.
+    """
+    if not isinstance(doc, Mapping) or "@graph" not in doc or "Dataset" in _types(doc):
+        return doc, None
+    nodes = [n for n in _as_list(doc.get("@graph")) if "Dataset" in _types(n)]
+    if len(nodes) > 1:
+        return doc, (f"@graph holds {len(nodes)} Dataset nodes; a Croissant document "
+                     "describes one dataset")
+    if nodes:
+        return {"@context": doc.get("@context"), **nodes[0]}, None
+    return doc, None
 
 
 def _str_value(value: Any) -> str | None:
@@ -2387,11 +2476,20 @@ class _Importer:
             if isinstance(k, Mapping):
                 kn = _n(k)
                 name = self.one(kn.get("name"), f"keywords[{i}].name")
-                unit = self.one(kn.get("termCode"), f"keywords[{i}].termCode") or \
-                    self.one(kn.get("url"), f"keywords[{i}].url") or \
-                    (k.get("@id") if isinstance(k.get("@id"), str) else "")
+                code = self.one(kn.get("termCode"), f"keywords[{i}].termCode")
+                url = self.one(kn.get("url"), f"keywords[{i}].url")
+                unit = code or url or (k.get("@id") if isinstance(k.get("@id"), str) else "")
                 if name:
                     kws.append(_leaf(name, unit or ""))
+                    # A keyword AVU holds the name and one term code or IRI (its unit).
+                    if code and url and url != code:
+                        self.warn(f"keywords[{i}].url", "a keyword AVU keeps one term "
+                                  "identifier: termCode is kept, url dropped")
+                    if not _missing(kn.get("inDefinedTermSet")):
+                        self.warn(f"keywords[{i}].inDefinedTermSet",
+                                  "the convention has no key for a keyword's term set; "
+                                  "inDefinedTermSet dropped (the name and the term "
+                                  "identifier are kept)")
                 else:
                     self.warn(f"keywords[{i}]", "keyword without a name; dropped")
             else:
@@ -2649,7 +2747,7 @@ def _file_from_distribution(model: dict[str, Any], item: Mapping[str, Any],
         if _lv(pick.get(key)):
             fm[key] = pick[key]
     fmt = _lv(pick.get("encodingFormat"))
-    if fmt and fmt != encoding_format_for(name):
+    if fmt and fmt != (encoding_format_for(name) or _DEFAULT_ENCODING):
         fm["encodingFormat"] = pick["encodingFormat"]
     md5 = _lv(pick.get("md5"))
     if md5 and md5 != str(item.get("md5") or ""):
@@ -2671,13 +2769,13 @@ def from_jsonld(doc: Any, *, content_base: str | None = None,
     """Import a Croissant 0.8 / 1.0 / 1.1 (+RAI, +Geo) document as ``croissant.*`` AVUs.
 
     ``doc`` is a dict or a JSON string; a ``@graph`` document is searched for its
-    ``Dataset`` node. Keys may be compact (``name``), prefixed (``sc:``, ``schema:``,
-    ``cr:``, ``ml:``, ``rai:``, ``geocr:``, ``prov:``, ``dct:``) or full IRIs (http
-    or https schema.org). RAI terms in ``cr:`` (Hugging Face) and the mlcroissant
-    spellings are accepted; 1.0 ``repeated`` / ``delimiter`` / ``jsonQuery`` become
-    ``isArray`` / ``separator`` / ``jsonPath``. ``content_base`` (optional) turns
-    ``contentUrl``s below that URL back into decoded relative paths (only when the
-    generator would write the same URL again).
+    ``Dataset`` node (more than one is an error). Keys may be compact (``name``), prefixed
+    (``sc:``, ``schema:``, ``cr:``, ``ml:``, ``rai:``, ``geocr:``, ``prov:``, ``dct:``) or
+    full IRIs (http or https schema.org). RAI terms in ``cr:`` (Hugging Face) and the
+    mlcroissant spellings are accepted; 1.0 ``repeated`` / ``delimiter`` / ``jsonQuery``
+    become ``isArray`` / ``separator`` / ``jsonPath``. ``content_base`` (optional) turns
+    ``contentUrl``s below that URL back into decoded relative paths (only when the generator
+    would write the same URL again).
 
     ``item`` (optional, the shape :func:`to_jsonld` takes: ``path``, ``name``,
     ``is_folder``, ``md5``) names the target. ``content_base`` defaults to its folder (a
@@ -2705,10 +2803,9 @@ def from_jsonld(doc: Any, *, content_base: str | None = None,
             return {"avus": [], "warnings": [], "errors": [_msg("", f"not valid JSON: {exc}")]}
     if _too_deep(doc):
         return {"avus": [], "warnings": [], "errors": [_msg("", _TOO_DEEP)]}
-    if isinstance(doc, Mapping) and "@graph" in doc and "Dataset" not in _types(doc):
-        nodes = [n for n in _as_list(doc.get("@graph")) if "Dataset" in _types(n)]
-        if nodes:
-            doc = {"@context": doc.get("@context"), **nodes[0]}
+    doc, graph_error = _graph_dataset(doc)
+    if graph_error:
+        return {"avus": [], "warnings": [], "errors": [_msg("@graph", graph_error)]}
     if not isinstance(doc, Mapping):
         return {"avus": [], "warnings": [], "errors": [_msg("", "document must be a JSON object")]}
     if content_base is None and item is not None:
@@ -2933,12 +3030,33 @@ def _validate_source(v: _Validator, src: Any, path: str, sources: set[str]) -> N
         sources.add(ref)
 
 
+def _http_schema_org(doc: Mapping) -> bool:
+    """True when the document names schema.org with ``http://`` (its ``@vocab``, the
+    ``sc`` / ``schema`` prefix, or a full-IRI ``@type`` / key of the Dataset node)."""
+    ctx = doc.get("@context")
+    http = ("http://schema.org/", "http://schema.org")
+    for c in _as_list(ctx):
+        if isinstance(c, str) and c in http:
+            return True
+        if isinstance(c, Mapping) and any(
+                isinstance(c.get(k), str) and c[k] in http for k in ("@vocab", "sc", "schema")):
+            return True
+    types = [t for t in _as_list(doc.get("@type")) if isinstance(t, str)]
+    return any(t.startswith(http[0]) for t in types) or \
+        any(isinstance(k, str) and k.startswith(http[0]) for k in doc)
+
+
 def validate(doc: Any) -> dict[str, Any]:
     """Structural validation of a Croissant JSON-LD document.
 
     Checks required properties, ``@id`` uniqueness, source / reference / containedIn
     targets, FileSet ``includes``, field ``dataType``, dates, bounding boxes, license
     URLs, value lengths and more. Accepts compact, prefixed or full-IRI keys.
+
+    A ``@graph`` document is checked on its one ``Dataset`` node, as :func:`from_jsonld`
+    imports it. Warnings (not errors) name what mlcroissant 1.1.1 cannot load although
+    Croissant allows it: ``sc:DefinedTerm`` keywords, an ``@context`` that is not an
+    object, and ``http://schema.org/`` documents.
 
     Returns ``{"valid": bool, "errors": [{"path", "message"}], "warnings": [...],
     "conformsTo": [...], "summary": {"distribution": n, "recordSet": n, "field": n}}``.
@@ -2956,14 +3074,26 @@ def validate(doc: Any) -> dict[str, Any]:
     if not v.errors and _too_deep(doc):
         doc = None
         v.err("", _TOO_DEEP)
-    if not isinstance(doc, Mapping):
+    if not v.errors:
+        doc, graph_error = _graph_dataset(doc)
+        if graph_error:
+            v.err("@graph", graph_error)
+    if not isinstance(doc, Mapping) or v.errors:
         if not v.errors:
             v.err("", "document must be a JSON object")
         return {"valid": False, "errors": v.errors, "warnings": [], "conformsTo": [],
                 "summary": summary}
     nd = _n(doc)
-    if "@context" not in doc:
+    ctx = doc.get("@context")
+    if ctx is None:  # absent, null, or a @graph document without one
         v.err("@context", "@context is required")
+    elif not isinstance(ctx, Mapping):
+        v.warn("@context", "@context should be an object: mlcroissant 1.1.1 refuses any other "
+                           "@context (a string or a list)")
+    if _http_schema_org(doc):
+        v.warn("@context", "the document uses http://schema.org/: mlcroissant 1.1.1 does not "
+                           "find the Dataset of such a document (use https://schema.org/; "
+                           "see the README, Validating with mlcroissant)")
     if "Dataset" not in _types(doc):
         v.err("@type", "@type must be sc:Dataset")
 
@@ -3027,9 +3157,16 @@ def validate(doc: Any) -> dict[str, Any]:
     is_live = bool(live) and live[0] is True
     if live and not isinstance(live[0], bool):
         v.warn("isLiveDataset", "isLiveDataset must be a boolean")
+    terms = 0
     for i, k in enumerate(_vals(nd.get("keywords"))):
-        if isinstance(k, Mapping) and _missing(_n(k).get("name")):
-            v.warn(f"keywords[{i}]", "DefinedTerm keyword without a name")
+        if isinstance(k, Mapping):
+            terms += 1
+            if _missing(_n(k).get("name")):
+                v.warn(f"keywords[{i}]", "DefinedTerm keyword without a name")
+    if terms:
+        v.warn("keywords", f"{terms} keyword(s) are objects (sc:DefinedTerm), which "
+                           "mlcroissant 1.1.1 cannot load; export with keyword_style 'text' "
+                           "for plain names")
     for i, t in enumerate(_vals(nd.get("dataCollectionTimeframe") or
                                 nd.get("dataCollectionTimeFrame"))):
         if isinstance(t, str) and not _interval_ok(t):
@@ -3267,7 +3404,48 @@ _ENCODINGS = {
     "shp": "application/x-esri-shape",
     "kml": "application/vnd.google-earth.kml+xml",
     "arff": "https://ml.cms.waikato.ac.nz/weka/arff.html",
+    # Text, code and configuration files (core 1.3.1). IANA-registered types where one
+    # exists (application/toml, RFC 6922 sql, RFC 9239 js, RFC 7763 markdown, RFC 9512
+    # yaml, text/prs.fallenstein.rst, the Office Open XML types); otherwise the de-facto
+    # type of Python's mimetypes, Apache httpd's mime.types or freedesktop shared-mime-info
+    # (GitHub Linguist for r); plain-text formats without one are text/plain.
+    "toml": "application/toml",
+    "lock": "text/plain",
+    "log": "text/plain",
+    "ini": "text/plain",
+    "cfg": "text/plain",
+    "conf": "text/plain",
+    "csl": "application/vnd.citationstyles.style+xml",
+    "cff": "application/yaml",
+    "py": "text/x-python",
+    "ipynb": "application/x-ipynb+json",
+    "r": "text/x-rsrc",
+    "rmd": "text/markdown",
+    "qmd": "text/markdown",
+    "jl": "text/julia",
+    "sql": "application/sql",
+    "sh": "text/x-sh",
+    "js": "text/javascript",
+    "css": "text/css",
+    "c": "text/x-c",
+    "h": "text/x-c",
+    "cpp": "text/x-c",
+    "java": "text/x-java-source",
+    "rst": "text/prs.fallenstein.rst",
+    "tex": "application/x-tex",
+    "bib": "text/x-bibtex",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "rdf": "application/rdf+xml",
+    "owl": "application/rdf+xml",
+    "nt": "application/n-triples",
+    "nq": "application/n-quads",
+    "gml": "application/gml+xml",
+    "kmz": "application/vnd.google-earth.kmz",
 }
+#: encodingFormat of a FileObject / FileSet whose name gives no known type: mlcroissant
+#: requires one, and RFC 2046 names this type for arbitrary binary data.
+_DEFAULT_ENCODING = "application/octet-stream"
 
 
 def encoding_format_for(name: str) -> str | None:
@@ -3276,8 +3454,10 @@ def encoding_format_for(name: str) -> str | None:
     ``parquet`` -> ``application/x-parquet``, ``tif``/``tiff`` -> ``image/tiff``,
     ``nc`` -> ``application/x-netcdf``, ``h5``/``hdf5`` -> ``application/x-hdf5``,
     ``ducklake`` -> ``application/x-ducklake``, ``duckdb`` -> ``application/x-duckdb``,
-    ``geojson`` -> ``application/geo+json``, ``zarr`` -> ``application/vnd+zarr`` and
-    so on. Query strings and fragments are ignored. ``None`` when unknown.
+    ``geojson`` -> ``application/geo+json``, ``zarr`` -> ``application/vnd+zarr``,
+    ``toml`` -> ``application/toml``, ``py`` -> ``text/x-python`` and so on. Query strings
+    and fragments are ignored. ``None`` when unknown: the generator then writes
+    ``application/octet-stream`` (convention section 5).
     """
     if not isinstance(name, str) or not name:
         return None
@@ -3562,7 +3742,7 @@ def suggest_distribution(entries: Iterable[Mapping[str, Any]], *,
         if rec["name"] != ent["id"]["value"]:
             ent["name"] = _leaf(rec["name"])
         ent["contentUrl"] = _leaf(rec["path"])
-        ent["encodingFormat"] = _leaf(fmt or "application/octet-stream")
+        ent["encodingFormat"] = _leaf(fmt or _DEFAULT_ENCODING)
         if rec.get("size") not in (None, ""):
             ent["contentSize"] = _leaf(_text(rec["size"]), "B")
         if rec.get("md5"):

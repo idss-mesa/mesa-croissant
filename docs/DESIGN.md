@@ -41,7 +41,10 @@ accepts both. Two mlcroissant 1.1.1 behaviours shape the output
 
 - it rejects `keywords` given as `sc:DefinedTerm` objects, which Croissant 1.1 allows and the
   generator writes for ontology keywords by default. `item["keyword_style"] = "text"` (the
-  portal's `&keywords=text`, the MCP export's `keyword_style: text`) writes plain names instead;
+  portal's `&keywords=text`, the MCP export's and path validation's `keyword_style: text`)
+  writes plain names instead, each name once (compared case-insensitively). `validate` warns
+  about DefinedTerm keywords, and likewise about an `@context` that is not an object and
+  about `http://schema.org/` documents, which mlcroissant also refuses;
 - it requires `md5` or `sha256` on every FileObject unless `isLiveDataset` is true. A file's
   own FileObject takes the MD5 of the Data Store stat (`item["md5"]`); distribution entries need
   `croissant.distribution.N.md5` / `sha256`. The validator warns when both are missing.
@@ -94,9 +97,13 @@ def from_jsonld(doc, *, content_base=None, item=None) -> dict
 def validate(doc) -> dict
     # {"valid": bool, "errors": [{"path": "recordSet[0].field[1].source", "message": ...}],
     #  "warnings": [...], "conformsTo": [...], "summary": {"distribution": n, "recordSet": n, "field": n}}
+    # a @graph document is checked on its Dataset node, as from_jsonld reads it (shared code;
+    # several Dataset nodes: one error at "@graph" in both); warnings, not errors, for what
+    # mlcroissant 1.1.1 refuses: DefinedTerm keywords, a non-object @context, http://schema.org/
     # a document nested more than MAX_JSON_DEPTH levels is invalid with one error (no RecursionError);
     # inline data / examples JSON deeper than 64 levels is emitted as text by to_jsonld, with a warning
-def encoding_format_for(name: str) -> str | None   # by extension
+def encoding_format_for(name: str) -> str | None   # by extension; None when unknown (the
+    # generator then writes application/octet-stream, so every FileObject / FileSet has one)
 def duckdb_type_to_croissant(type_name: str) -> dict
     # {"dataType": "cr:Int32", "dataTypes": ["cr:Int32"], "isArray": False, "arrayShape": None}
     # dataTypes is what writers store (GEOMETRY: ["sc:GeoShape", "sc:Text"]); dataType is the one
@@ -218,7 +225,7 @@ Registered through the `mesa_mcp.tools` entry point with `meta={"io.mesa/surface
 |---|---|---|
 | `mesa_croissant_template` | `{level: dataset\|rai\|geo\|file\|distribution\|recordset\|all}` | `key_catalog` (attribute, cardinality, required, unit, description) plus convention/core versions and notes; no I/O |
 | `mesa_croissant_export` | `{path, url?, keyword_style: defined_term\|text}` | reads the item's AVUs and stat (file size, MD5 checksum) → `to_jsonld` → `{path, path_target_type, document, sources, validation, croissant_avu_count}` |
-| `mesa_croissant_validate` | `{document}` or `{path}` | `validate` report plus `{checked, path, hint}` (the hint names `mlcroissant validate`) |
+| `mesa_croissant_validate` | `{document}` or `{path, keyword_style: defined_term\|text}` | `validate` report plus `{checked, path, hint}` (the hint names `mlcroissant validate` and `keyword_style`); a `path` is validated on the document `mesa_croissant_export` generates with the same `keyword_style` (default `defined_term`), which is ignored with a `document` |
 | `mesa_croissant_apply` | `{path, document? \| avus?, mode: merge\|replace, drop_unknown=false, dry_run=true, content_base?}` | the new set (below) → AVU diff against the item's `croissant.*` AVUs → `{diff: {add, remove, unchanged}, counts, written, errors, kept, warnings, import_errors, validation, partial_failure?}` (`validation`: the document the item would generate); unless `dry_run`, writes (adds first, removes by the exact stored triple) and mirrors one snapshot to the DuckLake AVU history (`record_avu_changes`, source `mesa-mcp:mesa_croissant_apply`) |
 | `mesa_croissant_from_schema` | `{columns: [{name, type}], record_set_id, source_id, record_set_index=1, record_set_name?, description?}` | record-set AVUs from a DuckDB/Arrow schema (section 9); STRUCT members get `transformJsonPath` = the member name (`$['…']` when it is not a plain identifier, as the DuckDB viewer writes it; the rule is in AVU_CONVENTION.md section 6, `transformJsonPath`), except a member that is itself a STRUCT, typed `sc:Text` without one; writes nothing. Details below |
 
